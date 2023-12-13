@@ -665,6 +665,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "motion-man"
+version = "0.1.0"
+dependencies = [
+ "after-drop",
+ "bitflags 2.4.1",
+ "bytemuck",
+ "glow",
+ "glutin",
+ "glutin-winit",
+ "nohash-hasher",
+ "raw-window-handle 0.5.2",
+ "tokio",
+ "winit",
+]
+
+[[package]]
 name = "ndk"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1037,22 +1053,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "the-video-maker"
-version = "0.1.0"
-dependencies = [
- "after-drop",
- "bitflags 2.4.1",
- "bytemuck",
- "glow",
- "glutin",
- "glutin-winit",
- "nohash-hasher",
- "raw-window-handle 0.5.2",
- "tokio",
- "winit",
 ]
 
 [[package]]

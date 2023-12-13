@@ -3,6 +3,7 @@ use std::{
     error::Error,
     future::Future,
     num::NonZeroU32,
+    ops::RangeInclusive,
     pin::{pin, Pin},
     rc::Rc,
     sync::Arc,
@@ -10,26 +11,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use after_drop::{AfterDrop, AfterDropBoxed};
+use after_drop::AfterDropBoxed;
 use glow as GL;
 use glow::HasContext;
 use glutin::{
     config::{Config, ConfigTemplateBuilder, GlConfig},
-    context::{
-        AsRawContext, ContextAttributes, ContextAttributesBuilder, NotCurrentGlContext,
-        PossiblyCurrentContext, PossiblyCurrentGlContext,
-    },
-    display::{GetGlDisplay, GlDisplay, RawDisplay},
-    surface::{
-        GlSurface, Surface, SurfaceAttributes, SurfaceAttributesBuilder, SwapInterval,
-        WindowSurface,
-    },
+    context::{ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentContext},
+    display::{GetGlDisplay, GlDisplay},
+    surface::{GlSurface, Surface, SurfaceAttributesBuilder, WindowSurface},
 };
-use glutin_winit::*;
-use nohash_hasher::IntMap;
 use raw_window_handle::HasRawWindowHandle;
 use tokio::{
-    runtime::Runtime,
     spawn,
     sync::{
         mpsc::{channel, Receiver, Sender},
@@ -38,12 +30,10 @@ use tokio::{
     task::JoinHandle,
 };
 use winit::{
-    dpi::{LogicalSize, PhysicalSize},
-    event_loop::EventLoopBuilder,
+    dpi::LogicalSize,
+    event_loop::{EventLoop, EventLoopBuilder},
     window::WindowBuilder,
-    window::{Window as WWindow, WindowId},
 };
-use GL::{PixelPackData, PixelUnpackData};
 
 type ORecv<T> = tokio::sync::oneshot::Receiver<T>;
 type OSend<T> = tokio::sync::oneshot::Sender<T>;
@@ -53,8 +43,7 @@ use tokio::sync::oneshot::channel as ochannel;
 pub enum EngineMessage {
     CreateRef(TypeId, OSend<Sender<ElementMessage>>),
     CreateElement(TypeId, Box<dyn Any + Send + Sync + 'static>),
-    WaitNextFrame,
-    WasDroped,
+    WaitNextFrame(OSend<()>),
     Submit,
 }
 
@@ -63,9 +52,19 @@ pub enum SceneMessage {
     Resumed,
 }
 
+pub struct EngineSender {
+    id: usize,
+    sender: Sender<(usize, EngineMessage)>,
+}
+
+impl EngineSender {
+    pub async fn send(&self, msg: EngineMessage) {
+        self.sender.send((self.id, msg)).await.unwrap();
+    }
+}
+
 pub struct SceneTask {
-    receiver: Receiver<SceneMessage>,
-    sender: Sender<EngineMessage>,
+    sender: EngineSender,
 
     info: Arc<RwLock<Info>>,
 }
@@ -77,15 +76,131 @@ pub struct Info {
 }
 
 impl Info {
-    pub fn fps(&self) -> f64 {
-        1. / self.delta
+    pub fn fps(&self) -> usize {
+        (1. / self.delta).round() as usize
+    }
+}
+
+pub struct Tween<'a> {
+    range: RangeInclusive<f32>,
+    time: f32,
+    runner: Box<dyn FnMut(f32) + Send + Sync + 'a>,
+    x: f32,
+}
+
+impl<'a> Tween<'a> {
+    pub fn new(
+        range: RangeInclusive<f32>,
+        time: f32,
+        runner: impl FnMut(f32) + Send + Sync + 'a,
+    ) -> Self {
+        Self {
+            x: *range.start(),
+            range,
+            time,
+            runner: Box::new(runner),
+        }
+    }
+}
+
+pub enum TweenBuilderStage<'a> {
+    Init {
+        task: &'a mut SceneTask,
+        tweens: Vec<Tween<'a>>,
+    },
+    Running(Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>>),
+}
+
+pub struct TweenBuilder<'a> {
+    stage: Option<TweenBuilderStage<'a>>,
+}
+
+impl<'a> TweenBuilder<'a> {
+    pub fn new(task: &'a mut SceneTask, tween: Tween<'a>) -> Self {
+        Self {
+            stage: Some(TweenBuilderStage::Init {
+                task,
+                tweens: vec![tween],
+            }),
+        }
+    }
+
+    pub fn tween(
+        mut self,
+        range: RangeInclusive<f32>,
+        time: f32,
+        runner: impl FnMut(f32) + Sync + Send + 'a,
+    ) -> Self {
+        if let TweenBuilderStage::Init { tweens, .. } = self.stage.as_mut().unwrap() {
+            tweens.push(Tween::new(range, time, runner));
+        }
+        self
+    }
+}
+
+impl<'a> Future for TweenBuilder<'a> {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        let task = self.stage.take().unwrap();
+
+        match task {
+            TweenBuilderStage::Init { task, mut tweens } => {
+                let future = Box::pin(async move {
+                    let delta = task.info(|i| i.delta).await as f32;
+                    loop {
+                        tweens.retain_mut(|tween| {
+                            let start = *tween.range.start();
+                            let end = *tween.range.end();
+
+                            let inverse = start > end;
+                            if inverse {
+                                tween.x -= (delta / tween.time) * (start - end);
+                                (tween.runner)(tween.x);
+
+                                tween.x >= end
+                            } else {
+                                tween.x += (delta / tween.time) * (end - start);
+                                (tween.runner)(tween.x);
+
+                                tween.x <= end
+                            }
+                        });
+                        task.submit().await;
+                        task.wait(1).await;
+
+                        if tweens.is_empty() {
+                            break;
+                        }
+                    }
+                });
+
+                self.stage.replace(TweenBuilderStage::Running(future));
+            }
+            TweenBuilderStage::Running(mut run) => {
+                let res = pin!(&mut run).poll(cx);
+                self.stage.replace(TweenBuilderStage::Running(run));
+                return res;
+            }
+        }
+
+        if let TweenBuilderStage::Running(mut run) = self.stage.take().unwrap() {
+            let res = pin!(&mut run).poll(cx);
+            self.stage.replace(TweenBuilderStage::Running(run));
+            res
+        } else {
+            Ready(())
+        }
     }
 }
 
 impl SceneTask {
-    pub async fn wait(&mut self) {
-        let _ = self.sender.send(EngineMessage::WaitNextFrame).await;
-        self.receiver.recv().await.unwrap();
+    pub async fn wait(&mut self, frames: usize) {
+        for _ in 0..frames {
+            let (send, recv) = ochannel();
+            let _ = self.sender.send(EngineMessage::WaitNextFrame(send)).await;
+            recv.await.unwrap();
+        }
     }
 
     pub async fn info<O>(&self, reader: impl Fn(&Info) -> O) -> O {
@@ -97,8 +212,7 @@ impl SceneTask {
         let (send, recv) = ochannel();
         self.sender
             .send(EngineMessage::CreateRef(builder.node_id(), send))
-            .await
-            .unwrap();
+            .await;
 
         let element_ref = builder.create_element_ref(recv.await.unwrap());
 
@@ -107,31 +221,39 @@ impl SceneTask {
                 builder.node_id(),
                 Box::new(builder),
             ))
-            .await
-            .unwrap();
+            .await;
 
         element_ref
     }
 
     pub async fn submit(&mut self) {
         self.sender.send(EngineMessage::Submit).await;
-        self.receiver.recv().await;
     }
-}
 
-impl Drop for SceneTask {
-    fn drop(&mut self) {
-        let _ = self.sender.try_send(EngineMessage::WasDroped);
+    pub fn tween<'a>(
+        &'a mut self,
+        range: RangeInclusive<f32>,
+        time: f32,
+        runner: impl FnMut(f32) + 'a + Sync + Send,
+    ) -> TweenBuilder<'a> {
+        TweenBuilder::new(self, Tween::new(range, time, runner))
     }
 }
 
 pub struct EngineScene {
-    receiver: Receiver<EngineMessage>,
-    sender: Sender<SceneMessage>,
+    id: usize,
+    handler: JoinHandle<()>,
 }
 
 pub struct Engine {
-    scenes: Vec<(JoinHandle<()>, EngineScene)>,
+    scenes: Vec<EngineScene>,
+
+    counter: usize,
+    engine_sender: Sender<(usize, EngineMessage)>,
+    receiver: Receiver<(usize, EngineMessage)>,
+
+    waiting: Vec<OSend<()>>,
+
     info: Arc<RwLock<Info>>,
 
     nodes: Vec<Box<dyn AbstractNode>>,
@@ -231,19 +353,24 @@ pub struct RectRef {
 }
 
 impl RectRef {
-    pub fn set_size(&self, size: [f32; 2]) {
+    pub fn set_size(&mut self, size: [f32; 2]) {
         self.sender
             .try_send(ElementMessage::Set(0, Box::new(size)))
             .unwrap();
     }
 
-    pub fn set_color(&self, color: impl Into<Color>) {
-        self.sender
+    pub fn set_color(&mut self, color: impl Into<Color>) {
+        if self
+            .sender
             .try_send(ElementMessage::Set(1, Box::new(color.into())))
-            .unwrap();
+            .is_err()
+        {
+            eprintln!("You can only set one element property per update!");
+            panic!();
+        }
     }
 
-    pub fn set_position(&self, position: [f32; 2]) {
+    pub fn set_position(&mut self, position: [f32; 2]) {
         self.sender
             .try_send(ElementMessage::Set(2, Box::new(position)))
             .unwrap();
@@ -349,7 +476,7 @@ impl Node for RectNode {
     }
 
     fn create_ref(&mut self) -> Sender<ElementMessage> {
-        let (send, recv) = channel(8);
+        let (send, recv) = channel(1);
         self.receivers.push(recv);
         send
     }
@@ -434,10 +561,17 @@ impl Engine {
             width,
             height,
         };
+
+        let (engine_sender, receiver) = channel(8);
+
         Self {
             scenes: Vec::default(),
             info: Arc::new(RwLock::new(info)),
             nodes: Vec::default(),
+            counter: 0,
+            engine_sender,
+            receiver,
+            waiting: Vec::default(),
         }
     }
 
@@ -445,22 +579,24 @@ impl Engine {
         &mut self,
         scene_run: impl Fn(SceneTask) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>>,
     ) {
-        let (e_sender, e_receiver) = channel::<EngineMessage>(1);
-        let (s_sender, s_receiver) = channel::<SceneMessage>(1);
+        let id = self.counter;
+        self.counter += 1;
 
         let scene = SceneTask {
-            receiver: s_receiver,
-            sender: e_sender,
+            sender: EngineSender {
+                id,
+                sender: self.engine_sender.clone(),
+            },
 
             info: self.info.clone(),
         };
 
-        let editor_scene = EngineScene {
-            receiver: e_receiver,
-            sender: s_sender,
+        let engine_scene = EngineScene {
+            id,
+            handler: spawn(scene_run(scene)),
         };
 
-        self.scenes.push((spawn(scene_run(scene)), editor_scene));
+        self.scenes.push(engine_scene);
     }
 
     pub fn register_node<T: AbstractNode + Default + 'static>(&mut self) {
@@ -478,35 +614,24 @@ impl Engine {
         self.scenes.is_empty()
     }
 
-    pub fn run(&mut self, gcx: &GCX, runtime: &Runtime) {
+    pub fn init(&mut self, gcx: &GCX) {
         for node in self.nodes.iter_mut() {
             node.init(gcx);
         }
+    }
 
-        let mut waiting = 0;
+    pub async fn run(&mut self, gcx: &GCX) {
+        for waiting in self.waiting.drain(..) {
+            waiting.send(()).unwrap();
+        }
 
         loop {
-            let switch = core::future::poll_fn(|cx| {
-                for (i, (_, EngineScene { receiver, .. })) in self.scenes.iter_mut().enumerate() {
-                    if let Poll::Ready(res) = pin!(receiver.recv()).poll(cx) {
-                        return Poll::Ready((i, res));
-                    }
-                }
-
-                Poll::Pending
-            });
-
-            let (from, msg) = runtime.block_on(switch);
-            println!("From: {from}, {msg:?}");
-            if let Some(msg) = msg {
+            tokio::task::yield_now().await;
+            if let Ok((from, msg)) = self.receiver.try_recv() {
+                println!("From: {from}, {msg:?}");
                 match msg {
-                    EngineMessage::WaitNextFrame => {
-                        waiting += 1;
-                        let _ = runtime
-                            .block_on(self.scenes[from].1.sender.send(SceneMessage::NextFrame));
-                    }
-                    EngineMessage::WasDroped => {
-                        self.scenes.remove(from);
+                    EngineMessage::WaitNextFrame(send) => {
+                        self.waiting.push(send);
                     }
                     EngineMessage::CreateElement(type_id, builder) => {
                         for node in self.nodes.iter_mut() {
@@ -529,16 +654,14 @@ impl Engine {
                         for node in self.nodes.iter_mut() {
                             node.update();
                         }
-                        runtime
-                            .block_on(self.scenes[from].1.sender.send(SceneMessage::Resumed))
-                            .unwrap();
                     }
                 }
             }
 
-            self.scenes.retain(|(handler, _)| !handler.is_finished());
+            self.scenes
+                .retain(|EngineScene { handler, .. }| !handler.is_finished());
 
-            if self.scenes.len() <= waiting {
+            if self.scenes.len() <= self.waiting.len() {
                 break;
             }
         }
@@ -1069,7 +1192,7 @@ impl Buffer {
 
 #[derive(Debug, Clone)]
 pub struct Buffer {
-    inner: Arc<BufferInner>,
+    inner: Rc<BufferInner>,
 }
 
 #[derive(Debug, Clone)]
@@ -1127,7 +1250,7 @@ impl GCX {
         VertexArrayBuilder {
             array_buffer,
             attribs: Vec::new(),
-            _marker: std::marker::PhantomData::default(),
+            _marker: std::marker::PhantomData,
         }
     }
 
@@ -1148,7 +1271,7 @@ impl GCX {
 
         let gl = gl.clone();
         Buffer {
-            inner: Arc::new(BufferInner { gl, buffer, ty }),
+            inner: Rc::new(BufferInner { gl, buffer, ty }),
         }
     }
 
@@ -1216,9 +1339,17 @@ impl<'a> GCXFinal<'a> {
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    println!("Hy");
-
+fn make_context() -> Result<
+    (
+        EventLoop<()>,
+        winit::window::Window,
+        Config,
+        PossiblyCurrentContext,
+        Surface<WindowSurface>,
+        GL::Context,
+    ),
+    Box<dyn Error>,
+> {
     let event_loop = EventLoopBuilder::new().build().unwrap();
 
     let (_, config) = glutin_winit::DisplayBuilder::new()
@@ -1330,15 +1461,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
         gl.enable(GL::DEBUG_OUTPUT)
     }
+    Ok((event_loop, window, config, context, surface, gl))
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let (event_loop, window, config, context, surface, gl) = make_context()?;
 
     let rt = tokio::runtime::Builder::new_current_thread().build()?;
     let _enter = rt.enter();
 
-    let mut editor = Engine::new(144., 1920.try_into()?, 1080.try_into()?);
+    let mut engine = Engine::new(144., 1920.try_into()?, 1080.try_into()?);
 
-    editor.register_node::<RectNode>();
+    engine.register_node::<RectNode>();
 
-    editor.create_scene(|mut scene| {
+    engine.create_scene(|mut scene| {
         Box::pin(async move {
             scene
                 .info(|info| {
@@ -1348,74 +1484,67 @@ fn main() -> Result<(), Box<dyn Error>> {
                 })
                 .await;
 
-            let rect = scene
+            let mut rect = scene
                 .spawn_element(RectBuilder::new([1., 1.], 0xffff))
                 .await;
 
-            scene.wait().await;
+            scene.wait(scene.info(|i| i.fps()).await).await;
 
             rect.set_color(Color::GREEN);
-            scene.submit().await;
-            scene.wait().await;
 
-            let rect2 = scene
+            scene.submit().await;
+            scene.wait(1).await;
+
+            let mut rect2 = scene
                 .spawn_element(
                     RectBuilder::new([0.5, 0.5], Color::BLUE).with_position([-0.5, -0.5]),
                 )
                 .await;
 
-            scene.wait().await;
+            scene.wait(1).await;
 
-            let mut x = -0.5;
-            let mut y = -0.5;
-            for _ in 0..scene.info(|i| i.fps()).await as usize {
-                x += scene.info(|i| i.delta).await as f32;
-                rect2.set_position([x, y]);
-                scene.submit().await;
-                scene.wait().await;
-            }
+            scene
+                .tween(-0.5..=0.5, 1.0, |x| rect2.set_position([x, -0.5]))
+                .await;
 
-            for _ in 0..scene.info(|i| i.fps()).await as usize {
-                y += scene.info(|i| i.delta).await as f32;
-                rect2.set_position([x, y]);
-                scene.submit().await;
-                scene.wait().await;
-            }
+            scene
+                .tween(-0.5..=0.5, 1.0, |y| rect2.set_position([0.5, y]))
+                .await;
 
-            for _ in 0..scene.info(|i| i.fps()).await as usize {
-                x -= scene.info(|i| i.delta).await as f32;
-                rect2.set_position([x, y]);
-                scene.submit().await;
-                scene.wait().await;
-            }
+            scene
+                .tween(0.5..=-0.5, 1.0, |x| rect2.set_position([x, 0.5]))
+                .await;
 
-            for _ in 0..scene.info(|i| i.fps()).await as usize {
-                y -= scene.info(|i| i.delta).await as f32;
-                rect2.set_position([x, y]);
-                scene.submit().await;
-                scene.wait().await;
-            }
+            scene
+                .tween(0.5..=-0.5, 1.0, |y| rect2.set_position([-0.5, y]))
+                .await;
+
+            scene
+                .tween(-0.5..=0.0, 1.0, |i| rect2.set_position([i, i]))
+                .await;
         })
     });
 
     let gcx = GCX::new(Rc::new(gl));
 
-    let width = editor.info.try_read().unwrap().width;
-    let height = editor.info.try_read().unwrap().height;
-    window.request_inner_size(LogicalSize::new(width.get(), height.get()));
+    let width = engine.info.try_read().unwrap().width;
+    let height = engine.info.try_read().unwrap().height;
+    _ = window.request_inner_size(LogicalSize::new(width.get(), height.get()));
     surface.resize(&context, width, height);
     gcx.viewport(0, 0, width.get() as i32, height.get() as i32);
+
+    engine.init(&gcx);
 
     loop {
         let instant = Instant::now();
         gcx.clear_color(0xff);
         gcx.clear(BufferBit::COLOR);
 
-        editor.run(&gcx, &rt);
-        editor.render(&gcx);
+        rt.block_on(engine.run(&gcx));
+        engine.render(&gcx);
         surface.swap_buffers(&context).unwrap();
 
-        if let Some(remaining) = Duration::from_secs_f64(editor.info.blocking_read().delta)
+        if let Some(remaining) = Duration::from_secs_f64(engine.info.blocking_read().delta)
             .checked_sub(instant.elapsed())
         {
             std::thread::sleep(remaining);
@@ -1426,7 +1555,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
         }
 
-        if editor.finished() {
+        if engine.finished() {
             break;
         }
     }
