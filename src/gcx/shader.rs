@@ -8,7 +8,7 @@ use super::{GCX, GL};
 #[derive(Debug)]
 pub struct Shader {
     gl: Rc<GL::Context>,
-    pub(super) program: GL::Program,
+    pub program: GL::Program,
 }
 
 impl Drop for Shader {

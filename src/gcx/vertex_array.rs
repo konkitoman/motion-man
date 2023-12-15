@@ -54,6 +54,12 @@ impl Fields for () {
     }
 }
 
+impl<const SIZE: usize> Fields for [f32; SIZE] {
+    fn fields() -> Vec<Field> {
+        vec![Field::new::<[f32; SIZE]>("position")]
+    }
+}
+
 pub trait Fields {
     fn fields() -> Vec<Field>;
 }

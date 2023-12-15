@@ -37,7 +37,7 @@ pub enum PrimitiveType {
 
 #[derive(Debug, Clone)]
 pub struct GCX {
-    gl: Rc<glow::Context>,
+    pub gl: Rc<glow::Context>,
 }
 
 impl GCX {
