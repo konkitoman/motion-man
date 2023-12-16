@@ -11,6 +11,101 @@ pub struct Shader {
     pub program: GL::Program,
 }
 
+pub trait SetUniform: Sized {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation);
+}
+
+impl SetUniform for i32 {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_1_i32(Some(location), self) };
+    }
+}
+
+impl SetUniform for (i32, i32) {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_2_i32(Some(location), self.0, self.1) };
+    }
+}
+
+impl SetUniform for (i32, i32, i32) {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_3_i32(Some(location), self.0, self.1, self.2) };
+    }
+}
+
+impl SetUniform for (i32, i32, i32, i32) {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_4_i32(Some(location), self.0, self.1, self.2, self.3) };
+    }
+}
+
+impl SetUniform for u32 {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_1_u32(Some(location), self) };
+    }
+}
+
+impl SetUniform for (u32, u32) {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_2_u32(Some(location), self.0, self.1) };
+    }
+}
+
+impl SetUniform for (u32, u32, u32) {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_3_u32(Some(location), self.0, self.1, self.2) };
+    }
+}
+
+impl SetUniform for (u32, u32, u32, u32) {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_4_u32(Some(location), self.0, self.1, self.2, self.3) };
+    }
+}
+
+impl SetUniform for f32 {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_1_f32(Some(location), self) };
+    }
+}
+
+impl SetUniform for (f32, f32) {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_2_f32(Some(location), self.0, self.1) };
+    }
+}
+
+impl SetUniform for (f32, f32, f32) {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_3_f32(Some(location), self.0, self.1, self.2) };
+    }
+}
+
+impl SetUniform for (f32, f32, f32, f32) {
+    fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+        unsafe { gl.uniform_4_f32(Some(location), self.0, self.1, self.2, self.3) };
+    }
+}
+
+// impl SetUniform for &[i32] {
+//     fn set_uniform(self, gl: &GL::Context, location: &GL::NativeUniformLocation) {
+//         unsafe { gl.uniform }
+//     }
+// }
+
+impl Shader {
+    pub fn set_uniform<T: SetUniform>(&self, name: &str, data: T) -> Result<(), T> {
+        unsafe {
+            let Some(location) = self.gl.get_uniform_location(self.program, name) else {
+                return Err(data);
+            };
+
+            data.set_uniform(&self.gl, &location);
+        }
+        Ok(())
+    }
+}
+
 impl Drop for Shader {
     fn drop(&mut self) {
         unsafe {

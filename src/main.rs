@@ -25,7 +25,11 @@ use GL::HasContext;
 use motion_man::{
     color::Color,
     engine::Engine,
-    gcx::{buffer::BufferUsage, BufferBit, GCX, GL},
+    gcx::{
+        buffer::BufferUsage,
+        texture::{Format, InternalFormat, TextureTarget, TextureType},
+        BufferBit, GCX, GL,
+    },
     rect::{RectBuilder, RectNode},
 };
 
@@ -736,8 +740,488 @@ impl Drop for AVCodecContext {
     }
 }
 
+#[derive(Clone, Copy)]
+#[repr(i32)]
+pub enum AVPixelFormat {
+    NONE = FF::AVPixelFormat_AV_PIX_FMT_NONE,
+    YUV420P = FF::AVPixelFormat_AV_PIX_FMT_YUV420P,
+    YUYV422 = FF::AVPixelFormat_AV_PIX_FMT_YUYV422,
+    RGB24 = FF::AVPixelFormat_AV_PIX_FMT_RGB24,
+    BGR24 = FF::AVPixelFormat_AV_PIX_FMT_BGR24,
+    YUV422P = FF::AVPixelFormat_AV_PIX_FMT_YUV422P,
+    YUV444P = FF::AVPixelFormat_AV_PIX_FMT_YUV444P,
+    YUV410P = FF::AVPixelFormat_AV_PIX_FMT_YUV410P,
+    YUV411P = FF::AVPixelFormat_AV_PIX_FMT_YUV411P,
+    GRAY8 = FF::AVPixelFormat_AV_PIX_FMT_GRAY8,
+    MONOWHITE = FF::AVPixelFormat_AV_PIX_FMT_MONOWHITE,
+    MONOBLACK = FF::AVPixelFormat_AV_PIX_FMT_MONOBLACK,
+    PAL8 = FF::AVPixelFormat_AV_PIX_FMT_PAL8,
+    YUVJ420P = FF::AVPixelFormat_AV_PIX_FMT_YUVJ420P,
+    YUVJ422P = FF::AVPixelFormat_AV_PIX_FMT_YUVJ422P,
+    YUVJ444P = FF::AVPixelFormat_AV_PIX_FMT_YUVJ444P,
+    UYVY422 = FF::AVPixelFormat_AV_PIX_FMT_UYVY422,
+    UYYVYY411 = FF::AVPixelFormat_AV_PIX_FMT_UYYVYY411,
+    BGR8 = FF::AVPixelFormat_AV_PIX_FMT_BGR8,
+    BGR4 = FF::AVPixelFormat_AV_PIX_FMT_BGR4,
+    BGR4_BYTE = FF::AVPixelFormat_AV_PIX_FMT_BGR4_BYTE,
+    RGB8 = FF::AVPixelFormat_AV_PIX_FMT_RGB8,
+    RGB4 = FF::AVPixelFormat_AV_PIX_FMT_RGB4,
+    RGB4_BYTE = FF::AVPixelFormat_AV_PIX_FMT_RGB4_BYTE,
+    NV12 = FF::AVPixelFormat_AV_PIX_FMT_NV12,
+    NV21 = FF::AVPixelFormat_AV_PIX_FMT_NV21,
+    ARGB = FF::AVPixelFormat_AV_PIX_FMT_ARGB,
+    RGBA = FF::AVPixelFormat_AV_PIX_FMT_RGBA,
+    ABGR = FF::AVPixelFormat_AV_PIX_FMT_ABGR,
+    BGRA = FF::AVPixelFormat_AV_PIX_FMT_BGRA,
+    GRAY16BE = FF::AVPixelFormat_AV_PIX_FMT_GRAY16BE,
+    GRAY16LE = FF::AVPixelFormat_AV_PIX_FMT_GRAY16LE,
+    YUV440P = FF::AVPixelFormat_AV_PIX_FMT_YUV440P,
+    YUVJ440P = FF::AVPixelFormat_AV_PIX_FMT_YUVJ440P,
+    YUVA420P = FF::AVPixelFormat_AV_PIX_FMT_YUVA420P,
+    RGB48BE = FF::AVPixelFormat_AV_PIX_FMT_RGB48BE,
+    RGB48LE = FF::AVPixelFormat_AV_PIX_FMT_RGB48LE,
+    RGB565BE = FF::AVPixelFormat_AV_PIX_FMT_RGB565BE,
+    RGB565LE = FF::AVPixelFormat_AV_PIX_FMT_RGB565LE,
+    RGB555BE = FF::AVPixelFormat_AV_PIX_FMT_RGB555BE,
+    RGB555LE = FF::AVPixelFormat_AV_PIX_FMT_RGB555LE,
+    BGR565BE = FF::AVPixelFormat_AV_PIX_FMT_BGR565BE,
+    BGR565LE = FF::AVPixelFormat_AV_PIX_FMT_BGR565LE,
+    BGR555BE = FF::AVPixelFormat_AV_PIX_FMT_BGR555BE,
+    BGR555LE = FF::AVPixelFormat_AV_PIX_FMT_BGR555LE,
+    VAAPI = FF::AVPixelFormat_AV_PIX_FMT_VAAPI,
+    YUV420P16LE = FF::AVPixelFormat_AV_PIX_FMT_YUV420P16LE,
+    YUV420P16BE = FF::AVPixelFormat_AV_PIX_FMT_YUV420P16BE,
+    YUV422P16LE = FF::AVPixelFormat_AV_PIX_FMT_YUV422P16LE,
+    YUV422P16BE = FF::AVPixelFormat_AV_PIX_FMT_YUV422P16BE,
+    YUV444P16LE = FF::AVPixelFormat_AV_PIX_FMT_YUV444P16LE,
+    YUV444P16BE = FF::AVPixelFormat_AV_PIX_FMT_YUV444P16BE,
+    DXVA2_VLD = FF::AVPixelFormat_AV_PIX_FMT_DXVA2_VLD,
+    RGB444LE = FF::AVPixelFormat_AV_PIX_FMT_RGB444LE,
+    RGB444BE = FF::AVPixelFormat_AV_PIX_FMT_RGB444BE,
+    BGR444LE = FF::AVPixelFormat_AV_PIX_FMT_BGR444LE,
+    BGR444BE = FF::AVPixelFormat_AV_PIX_FMT_BGR444BE,
+    // AVPixelFormat_AV_PIX_FMT_YA8 = FF::AVPixelFormat_AV_PIX_FMT_YA8,
+    // AVPixelFormat_AV_PIX_FMT_Y400A = FF::AVPixelFormat_AV_PIX_FMT_Y400A,
+    GRAY8A = FF::AVPixelFormat_AV_PIX_FMT_GRAY8A,
+    BGR48BE = FF::AVPixelFormat_AV_PIX_FMT_BGR48BE,
+    BGR48LE = FF::AVPixelFormat_AV_PIX_FMT_BGR48LE,
+    YUV420P9BE = FF::AVPixelFormat_AV_PIX_FMT_YUV420P9BE,
+    YUV420P9LE = FF::AVPixelFormat_AV_PIX_FMT_YUV420P9LE,
+    YUV420P10BE = FF::AVPixelFormat_AV_PIX_FMT_YUV420P10BE,
+    YUV420P10LE = FF::AVPixelFormat_AV_PIX_FMT_YUV420P10LE,
+    YUV422P10BE = FF::AVPixelFormat_AV_PIX_FMT_YUV422P10BE,
+    YUV422P10LE = FF::AVPixelFormat_AV_PIX_FMT_YUV422P10LE,
+    YUV444P9BE = FF::AVPixelFormat_AV_PIX_FMT_YUV444P9BE,
+    YUV444P9LE = FF::AVPixelFormat_AV_PIX_FMT_YUV444P9LE,
+    YUV444P10BE = FF::AVPixelFormat_AV_PIX_FMT_YUV444P10BE,
+    YUV444P10LE = FF::AVPixelFormat_AV_PIX_FMT_YUV444P10LE,
+    YUV422P9BE = FF::AVPixelFormat_AV_PIX_FMT_YUV422P9BE,
+    YUV422P9LE = FF::AVPixelFormat_AV_PIX_FMT_YUV422P9LE,
+    GBRP = FF::AVPixelFormat_AV_PIX_FMT_GBRP,
+    // AVPixelFormat_AV_PIX_FMT_GBR24P = FF::AVPixelFormat_AV_PIX_FMT_GBR24P,
+    GBRP9BE = FF::AVPixelFormat_AV_PIX_FMT_GBRP9BE,
+    GBRP9LE = FF::AVPixelFormat_AV_PIX_FMT_GBRP9LE,
+    GBRP10BE = FF::AVPixelFormat_AV_PIX_FMT_GBRP10BE,
+    GBRP10LE = FF::AVPixelFormat_AV_PIX_FMT_GBRP10LE,
+    GBRP16BE = FF::AVPixelFormat_AV_PIX_FMT_GBRP16BE,
+    GBRP16LE = FF::AVPixelFormat_AV_PIX_FMT_GBRP16LE,
+    YUVA422P = FF::AVPixelFormat_AV_PIX_FMT_YUVA422P,
+    YUVA444P = FF::AVPixelFormat_AV_PIX_FMT_YUVA444P,
+    YUVA420P9BE = FF::AVPixelFormat_AV_PIX_FMT_YUVA420P9BE,
+    YUVA420P9LE = FF::AVPixelFormat_AV_PIX_FMT_YUVA420P9LE,
+    YUVA422P9BE = FF::AVPixelFormat_AV_PIX_FMT_YUVA422P9BE,
+    YUVA422P9LE = FF::AVPixelFormat_AV_PIX_FMT_YUVA422P9LE,
+    YUVA444P9BE = FF::AVPixelFormat_AV_PIX_FMT_YUVA444P9BE,
+    YUVA444P9LE = FF::AVPixelFormat_AV_PIX_FMT_YUVA444P9LE,
+    YUVA420P10BE = FF::AVPixelFormat_AV_PIX_FMT_YUVA420P10BE,
+    YUVA420P10LE = FF::AVPixelFormat_AV_PIX_FMT_YUVA420P10LE,
+    YUVA422P10BE = FF::AVPixelFormat_AV_PIX_FMT_YUVA422P10BE,
+    YUVA422P10LE = FF::AVPixelFormat_AV_PIX_FMT_YUVA422P10LE,
+    YUVA444P10BE = FF::AVPixelFormat_AV_PIX_FMT_YUVA444P10BE,
+    YUVA444P10LE = FF::AVPixelFormat_AV_PIX_FMT_YUVA444P10LE,
+    YUVA420P16BE = FF::AVPixelFormat_AV_PIX_FMT_YUVA420P16BE,
+    YUVA420P16LE = FF::AVPixelFormat_AV_PIX_FMT_YUVA420P16LE,
+    YUVA422P16BE = FF::AVPixelFormat_AV_PIX_FMT_YUVA422P16BE,
+    YUVA422P16LE = FF::AVPixelFormat_AV_PIX_FMT_YUVA422P16LE,
+    YUVA444P16BE = FF::AVPixelFormat_AV_PIX_FMT_YUVA444P16BE,
+    YUVA444P16LE = FF::AVPixelFormat_AV_PIX_FMT_YUVA444P16LE,
+    VDPAU = FF::AVPixelFormat_AV_PIX_FMT_VDPAU,
+    XYZ12LE = FF::AVPixelFormat_AV_PIX_FMT_XYZ12LE,
+    XYZ12BE = FF::AVPixelFormat_AV_PIX_FMT_XYZ12BE,
+    NV16 = FF::AVPixelFormat_AV_PIX_FMT_NV16,
+    NV20LE = FF::AVPixelFormat_AV_PIX_FMT_NV20LE,
+    NV20BE = FF::AVPixelFormat_AV_PIX_FMT_NV20BE,
+    RGBA64BE = FF::AVPixelFormat_AV_PIX_FMT_RGBA64BE,
+    RGBA64LE = FF::AVPixelFormat_AV_PIX_FMT_RGBA64LE,
+    BGRA64BE = FF::AVPixelFormat_AV_PIX_FMT_BGRA64BE,
+    BGRA64LE = FF::AVPixelFormat_AV_PIX_FMT_BGRA64LE,
+    YVYU422 = FF::AVPixelFormat_AV_PIX_FMT_YVYU422,
+    YA16BE = FF::AVPixelFormat_AV_PIX_FMT_YA16BE,
+    YA16LE = FF::AVPixelFormat_AV_PIX_FMT_YA16LE,
+    GBRAP = FF::AVPixelFormat_AV_PIX_FMT_GBRAP,
+    GBRAP16BE = FF::AVPixelFormat_AV_PIX_FMT_GBRAP16BE,
+    GBRAP16LE = FF::AVPixelFormat_AV_PIX_FMT_GBRAP16LE,
+    QSV = FF::AVPixelFormat_AV_PIX_FMT_QSV,
+    MMAL = FF::AVPixelFormat_AV_PIX_FMT_MMAL,
+    D3D11VA_VLD = FF::AVPixelFormat_AV_PIX_FMT_D3D11VA_VLD,
+    CUDA = FF::AVPixelFormat_AV_PIX_FMT_CUDA,
+    RGB = FF::AVPixelFormat_AV_PIX_FMT_0RGB,
+    RGB0 = FF::AVPixelFormat_AV_PIX_FMT_RGB0,
+    BGR = FF::AVPixelFormat_AV_PIX_FMT_0BGR,
+    BGR0 = FF::AVPixelFormat_AV_PIX_FMT_BGR0,
+    YUV420P12BE = FF::AVPixelFormat_AV_PIX_FMT_YUV420P12BE,
+    YUV420P12LE = FF::AVPixelFormat_AV_PIX_FMT_YUV420P12LE,
+    YUV420P14BE = FF::AVPixelFormat_AV_PIX_FMT_YUV420P14BE,
+    YUV420P14LE = FF::AVPixelFormat_AV_PIX_FMT_YUV420P14LE,
+    YUV422P12BE = FF::AVPixelFormat_AV_PIX_FMT_YUV422P12BE,
+    YUV422P12LE = FF::AVPixelFormat_AV_PIX_FMT_YUV422P12LE,
+    YUV422P14BE = FF::AVPixelFormat_AV_PIX_FMT_YUV422P14BE,
+    YUV422P14LE = FF::AVPixelFormat_AV_PIX_FMT_YUV422P14LE,
+    YUV444P12BE = FF::AVPixelFormat_AV_PIX_FMT_YUV444P12BE,
+    YUV444P12LE = FF::AVPixelFormat_AV_PIX_FMT_YUV444P12LE,
+    YUV444P14BE = FF::AVPixelFormat_AV_PIX_FMT_YUV444P14BE,
+    YUV444P14LE = FF::AVPixelFormat_AV_PIX_FMT_YUV444P14LE,
+    GBRP12BE = FF::AVPixelFormat_AV_PIX_FMT_GBRP12BE,
+    GBRP12LE = FF::AVPixelFormat_AV_PIX_FMT_GBRP12LE,
+    GBRP14BE = FF::AVPixelFormat_AV_PIX_FMT_GBRP14BE,
+    GBRP14LE = FF::AVPixelFormat_AV_PIX_FMT_GBRP14LE,
+    YUVJ411P = FF::AVPixelFormat_AV_PIX_FMT_YUVJ411P,
+    BAYER_BGGR8 = FF::AVPixelFormat_AV_PIX_FMT_BAYER_BGGR8,
+    BAYER_RGGB8 = FF::AVPixelFormat_AV_PIX_FMT_BAYER_RGGB8,
+    BAYER_GBRG8 = FF::AVPixelFormat_AV_PIX_FMT_BAYER_GBRG8,
+    BAYER_GRBG8 = FF::AVPixelFormat_AV_PIX_FMT_BAYER_GRBG8,
+    BAYER_BGGR16LE = FF::AVPixelFormat_AV_PIX_FMT_BAYER_BGGR16LE,
+    BAYER_BGGR16BE = FF::AVPixelFormat_AV_PIX_FMT_BAYER_BGGR16BE,
+    BAYER_RGGB16LE = FF::AVPixelFormat_AV_PIX_FMT_BAYER_RGGB16LE,
+    BAYER_RGGB16BE = FF::AVPixelFormat_AV_PIX_FMT_BAYER_RGGB16BE,
+    BAYER_GBRG16LE = FF::AVPixelFormat_AV_PIX_FMT_BAYER_GBRG16LE,
+    BAYER_GBRG16BE = FF::AVPixelFormat_AV_PIX_FMT_BAYER_GBRG16BE,
+    BAYER_GRBG16LE = FF::AVPixelFormat_AV_PIX_FMT_BAYER_GRBG16LE,
+    BAYER_GRBG16BE = FF::AVPixelFormat_AV_PIX_FMT_BAYER_GRBG16BE,
+    XVMC = FF::AVPixelFormat_AV_PIX_FMT_XVMC,
+    YUV440P10LE = FF::AVPixelFormat_AV_PIX_FMT_YUV440P10LE,
+    YUV440P10BE = FF::AVPixelFormat_AV_PIX_FMT_YUV440P10BE,
+    YUV440P12LE = FF::AVPixelFormat_AV_PIX_FMT_YUV440P12LE,
+    YUV440P12BE = FF::AVPixelFormat_AV_PIX_FMT_YUV440P12BE,
+    AYUV64LE = FF::AVPixelFormat_AV_PIX_FMT_AYUV64LE,
+    AYUV64BE = FF::AVPixelFormat_AV_PIX_FMT_AYUV64BE,
+    VIDEOTOOLBOX = FF::AVPixelFormat_AV_PIX_FMT_VIDEOTOOLBOX,
+    P010LE = FF::AVPixelFormat_AV_PIX_FMT_P010LE,
+    P010BE = FF::AVPixelFormat_AV_PIX_FMT_P010BE,
+    GBRAP12BE = FF::AVPixelFormat_AV_PIX_FMT_GBRAP12BE,
+    GBRAP12LE = FF::AVPixelFormat_AV_PIX_FMT_GBRAP12LE,
+    GBRAP10BE = FF::AVPixelFormat_AV_PIX_FMT_GBRAP10BE,
+    GBRAP10LE = FF::AVPixelFormat_AV_PIX_FMT_GBRAP10LE,
+    MEDIACODEC = FF::AVPixelFormat_AV_PIX_FMT_MEDIACODEC,
+    GRAY12BE = FF::AVPixelFormat_AV_PIX_FMT_GRAY12BE,
+    GRAY12LE = FF::AVPixelFormat_AV_PIX_FMT_GRAY12LE,
+    GRAY10BE = FF::AVPixelFormat_AV_PIX_FMT_GRAY10BE,
+    GRAY10LE = FF::AVPixelFormat_AV_PIX_FMT_GRAY10LE,
+    P016LE = FF::AVPixelFormat_AV_PIX_FMT_P016LE,
+    P016BE = FF::AVPixelFormat_AV_PIX_FMT_P016BE,
+    D3D11 = FF::AVPixelFormat_AV_PIX_FMT_D3D11,
+    GRAY9BE = FF::AVPixelFormat_AV_PIX_FMT_GRAY9BE,
+    GRAY9LE = FF::AVPixelFormat_AV_PIX_FMT_GRAY9LE,
+    GBRPF32BE = FF::AVPixelFormat_AV_PIX_FMT_GBRPF32BE,
+    GBRPF32LE = FF::AVPixelFormat_AV_PIX_FMT_GBRPF32LE,
+    GBRAPF32BE = FF::AVPixelFormat_AV_PIX_FMT_GBRAPF32BE,
+    GBRAPF32LE = FF::AVPixelFormat_AV_PIX_FMT_GBRAPF32LE,
+    DRM_PRIME = FF::AVPixelFormat_AV_PIX_FMT_DRM_PRIME,
+    OPENCL = FF::AVPixelFormat_AV_PIX_FMT_OPENCL,
+    GRAY14BE = FF::AVPixelFormat_AV_PIX_FMT_GRAY14BE,
+    GRAY14LE = FF::AVPixelFormat_AV_PIX_FMT_GRAY14LE,
+    GRAYF32BE = FF::AVPixelFormat_AV_PIX_FMT_GRAYF32BE,
+    GRAYF32LE = FF::AVPixelFormat_AV_PIX_FMT_GRAYF32LE,
+    YUVA422P12BE = FF::AVPixelFormat_AV_PIX_FMT_YUVA422P12BE,
+    YUVA422P12LE = FF::AVPixelFormat_AV_PIX_FMT_YUVA422P12LE,
+    YUVA444P12BE = FF::AVPixelFormat_AV_PIX_FMT_YUVA444P12BE,
+    YUVA444P12LE = FF::AVPixelFormat_AV_PIX_FMT_YUVA444P12LE,
+    NV24 = FF::AVPixelFormat_AV_PIX_FMT_NV24,
+    NV42 = FF::AVPixelFormat_AV_PIX_FMT_NV42,
+    VULKAN = FF::AVPixelFormat_AV_PIX_FMT_VULKAN,
+    Y210BE = FF::AVPixelFormat_AV_PIX_FMT_Y210BE,
+    Y210LE = FF::AVPixelFormat_AV_PIX_FMT_Y210LE,
+    X2RGB10LE = FF::AVPixelFormat_AV_PIX_FMT_X2RGB10LE,
+    X2RGB10BE = FF::AVPixelFormat_AV_PIX_FMT_X2RGB10BE,
+    X2BGR10LE = FF::AVPixelFormat_AV_PIX_FMT_X2BGR10LE,
+    X2BGR10BE = FF::AVPixelFormat_AV_PIX_FMT_X2BGR10BE,
+    P210BE = FF::AVPixelFormat_AV_PIX_FMT_P210BE,
+    P210LE = FF::AVPixelFormat_AV_PIX_FMT_P210LE,
+    P410BE = FF::AVPixelFormat_AV_PIX_FMT_P410BE,
+    P410LE = FF::AVPixelFormat_AV_PIX_FMT_P410LE,
+    P216BE = FF::AVPixelFormat_AV_PIX_FMT_P216BE,
+    P216LE = FF::AVPixelFormat_AV_PIX_FMT_P216LE,
+    P416BE = FF::AVPixelFormat_AV_PIX_FMT_P416BE,
+    P416LE = FF::AVPixelFormat_AV_PIX_FMT_P416LE,
+    VUYA = FF::AVPixelFormat_AV_PIX_FMT_VUYA,
+    RGBAF16BE = FF::AVPixelFormat_AV_PIX_FMT_RGBAF16BE,
+    RGBAF16LE = FF::AVPixelFormat_AV_PIX_FMT_RGBAF16LE,
+    VUYX = FF::AVPixelFormat_AV_PIX_FMT_VUYX,
+    P012LE = FF::AVPixelFormat_AV_PIX_FMT_P012LE,
+    P012BE = FF::AVPixelFormat_AV_PIX_FMT_P012BE,
+    Y212BE = FF::AVPixelFormat_AV_PIX_FMT_Y212BE,
+    Y212LE = FF::AVPixelFormat_AV_PIX_FMT_Y212LE,
+    XV30BE = FF::AVPixelFormat_AV_PIX_FMT_XV30BE,
+    XV30LE = FF::AVPixelFormat_AV_PIX_FMT_XV30LE,
+    XV36BE = FF::AVPixelFormat_AV_PIX_FMT_XV36BE,
+    XV36LE = FF::AVPixelFormat_AV_PIX_FMT_XV36LE,
+    RGBF32BE = FF::AVPixelFormat_AV_PIX_FMT_RGBF32BE,
+    RGBF32LE = FF::AVPixelFormat_AV_PIX_FMT_RGBF32LE,
+    RGBAF32BE = FF::AVPixelFormat_AV_PIX_FMT_RGBAF32BE,
+    RGBAF32LE = FF::AVPixelFormat_AV_PIX_FMT_RGBAF32LE,
+    P212BE = FF::AVPixelFormat_AV_PIX_FMT_P212BE,
+    P212LE = FF::AVPixelFormat_AV_PIX_FMT_P212LE,
+    P412BE = FF::AVPixelFormat_AV_PIX_FMT_P412BE,
+    P412LE = FF::AVPixelFormat_AV_PIX_FMT_P412LE,
+    GBRAP14BE = FF::AVPixelFormat_AV_PIX_FMT_GBRAP14BE,
+    GBRAP14LE = FF::AVPixelFormat_AV_PIX_FMT_GBRAP14LE,
+    NB = FF::AVPixelFormat_AV_PIX_FMT_NB,
+}
+
+impl From<i32> for AVPixelFormat {
+    fn from(value: i32) -> Self {
+        match value {
+            FF::AVPixelFormat_AV_PIX_FMT_NONE => Self::NONE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV420P => Self::YUV420P,
+            FF::AVPixelFormat_AV_PIX_FMT_YUYV422 => Self::YUYV422,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB24 => Self::RGB24,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR24 => Self::BGR24,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV422P => Self::YUV422P,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV444P => Self::YUV444P,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV410P => Self::YUV410P,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV411P => Self::YUV411P,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY8 => Self::GRAY8,
+            FF::AVPixelFormat_AV_PIX_FMT_MONOWHITE => Self::MONOWHITE,
+            FF::AVPixelFormat_AV_PIX_FMT_MONOBLACK => Self::MONOBLACK,
+            FF::AVPixelFormat_AV_PIX_FMT_PAL8 => Self::PAL8,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVJ420P => Self::YUVJ420P,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVJ422P => Self::YUVJ422P,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVJ444P => Self::YUVJ444P,
+            FF::AVPixelFormat_AV_PIX_FMT_UYVY422 => Self::UYVY422,
+            FF::AVPixelFormat_AV_PIX_FMT_UYYVYY411 => Self::UYYVYY411,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR8 => Self::BGR8,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR4 => Self::BGR4,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR4_BYTE => Self::BGR4_BYTE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB8 => Self::RGB8,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB4 => Self::RGB4,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB4_BYTE => Self::RGB4_BYTE,
+            FF::AVPixelFormat_AV_PIX_FMT_NV12 => Self::NV12,
+            FF::AVPixelFormat_AV_PIX_FMT_NV21 => Self::NV21,
+            FF::AVPixelFormat_AV_PIX_FMT_ARGB => Self::ARGB,
+            FF::AVPixelFormat_AV_PIX_FMT_RGBA => Self::RGBA,
+            FF::AVPixelFormat_AV_PIX_FMT_ABGR => Self::ABGR,
+            FF::AVPixelFormat_AV_PIX_FMT_BGRA => Self::BGRA,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY16BE => Self::GRAY16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY16LE => Self::GRAY16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV440P => Self::YUV440P,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVJ440P => Self::YUVJ440P,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA420P => Self::YUVA420P,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB48BE => Self::RGB48BE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB48LE => Self::RGB48LE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB565BE => Self::RGB565BE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB565LE => Self::RGB565LE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB555BE => Self::RGB555BE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB555LE => Self::RGB555LE,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR565BE => Self::BGR565BE,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR565LE => Self::BGR565LE,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR555BE => Self::BGR555BE,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR555LE => Self::BGR555LE,
+            FF::AVPixelFormat_AV_PIX_FMT_VAAPI => Self::VAAPI,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV420P16LE => Self::YUV420P16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV420P16BE => Self::YUV420P16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV422P16LE => Self::YUV422P16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV422P16BE => Self::YUV422P16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV444P16LE => Self::YUV444P16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV444P16BE => Self::YUV444P16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_DXVA2_VLD => Self::DXVA2_VLD,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB444LE => Self::RGB444LE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB444BE => Self::RGB444BE,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR444LE => Self::BGR444LE,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR444BE => Self::BGR444BE,
+            // FF::AVPixelFormat_AV_PIX_FMT_YA8 => Self::AVPixelFormat_AV_PIX_FMT_YA8,
+            // FF::AVPixelFormat_AV_PIX_FMT_Y400A => Self::AVPixelFormat_AV_PIX_FMT_Y400A,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY8A => Self::GRAY8A,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR48BE => Self::BGR48BE,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR48LE => Self::BGR48LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV420P9BE => Self::YUV420P9BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV420P9LE => Self::YUV420P9LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV420P10BE => Self::YUV420P10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV420P10LE => Self::YUV420P10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV422P10BE => Self::YUV422P10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV422P10LE => Self::YUV422P10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV444P9BE => Self::YUV444P9BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV444P9LE => Self::YUV444P9LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV444P10BE => Self::YUV444P10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV444P10LE => Self::YUV444P10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV422P9BE => Self::YUV422P9BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV422P9LE => Self::YUV422P9LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRP => Self::GBRP,
+            //FF:: AVPixelFormat_AV_PIX_FMT_GBR24P => Self::AVPixelFormat_AV_PIX_FMT_GBR24P,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRP9BE => Self::GBRP9BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRP9LE => Self::GBRP9LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRP10BE => Self::GBRP10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRP10LE => Self::GBRP10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRP16BE => Self::GBRP16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRP16LE => Self::GBRP16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA422P => Self::YUVA422P,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA444P => Self::YUVA444P,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA420P9BE => Self::YUVA420P9BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA420P9LE => Self::YUVA420P9LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA422P9BE => Self::YUVA422P9BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA422P9LE => Self::YUVA422P9LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA444P9BE => Self::YUVA444P9BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA444P9LE => Self::YUVA444P9LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA420P10BE => Self::YUVA420P10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA420P10LE => Self::YUVA420P10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA422P10BE => Self::YUVA422P10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA422P10LE => Self::YUVA422P10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA444P10BE => Self::YUVA444P10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA444P10LE => Self::YUVA444P10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA420P16BE => Self::YUVA420P16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA420P16LE => Self::YUVA420P16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA422P16BE => Self::YUVA422P16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA422P16LE => Self::YUVA422P16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA444P16BE => Self::YUVA444P16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA444P16LE => Self::YUVA444P16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_VDPAU => Self::VDPAU,
+            FF::AVPixelFormat_AV_PIX_FMT_XYZ12LE => Self::XYZ12LE,
+            FF::AVPixelFormat_AV_PIX_FMT_XYZ12BE => Self::XYZ12BE,
+            FF::AVPixelFormat_AV_PIX_FMT_NV16 => Self::NV16,
+            FF::AVPixelFormat_AV_PIX_FMT_NV20LE => Self::NV20LE,
+            FF::AVPixelFormat_AV_PIX_FMT_NV20BE => Self::NV20BE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGBA64BE => Self::RGBA64BE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGBA64LE => Self::RGBA64LE,
+            FF::AVPixelFormat_AV_PIX_FMT_BGRA64BE => Self::BGRA64BE,
+            FF::AVPixelFormat_AV_PIX_FMT_BGRA64LE => Self::BGRA64LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YVYU422 => Self::YVYU422,
+            FF::AVPixelFormat_AV_PIX_FMT_YA16BE => Self::YA16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YA16LE => Self::YA16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRAP => Self::GBRAP,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRAP16BE => Self::GBRAP16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRAP16LE => Self::GBRAP16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_QSV => Self::QSV,
+            FF::AVPixelFormat_AV_PIX_FMT_MMAL => Self::MMAL,
+            FF::AVPixelFormat_AV_PIX_FMT_D3D11VA_VLD => Self::D3D11VA_VLD,
+            FF::AVPixelFormat_AV_PIX_FMT_CUDA => Self::CUDA,
+            FF::AVPixelFormat_AV_PIX_FMT_0RGB => Self::RGB,
+            FF::AVPixelFormat_AV_PIX_FMT_RGB0 => Self::RGB0,
+            FF::AVPixelFormat_AV_PIX_FMT_0BGR => Self::BGR,
+            FF::AVPixelFormat_AV_PIX_FMT_BGR0 => Self::BGR0,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV420P12BE => Self::YUV420P12BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV420P12LE => Self::YUV420P12LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV420P14BE => Self::YUV420P14BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV420P14LE => Self::YUV420P14LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV422P12BE => Self::YUV422P12BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV422P12LE => Self::YUV422P12LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV422P14BE => Self::YUV422P14BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV422P14LE => Self::YUV422P14LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV444P12BE => Self::YUV444P12BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV444P12LE => Self::YUV444P12LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV444P14BE => Self::YUV444P14BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV444P14LE => Self::YUV444P14LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRP12BE => Self::GBRP12BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRP12LE => Self::GBRP12LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRP14BE => Self::GBRP14BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRP14LE => Self::GBRP14LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVJ411P => Self::YUVJ411P,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_BGGR8 => Self::BAYER_BGGR8,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_RGGB8 => Self::BAYER_RGGB8,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_GBRG8 => Self::BAYER_GBRG8,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_GRBG8 => Self::BAYER_GRBG8,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_BGGR16LE => Self::BAYER_BGGR16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_BGGR16BE => Self::BAYER_BGGR16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_RGGB16LE => Self::BAYER_RGGB16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_RGGB16BE => Self::BAYER_RGGB16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_GBRG16LE => Self::BAYER_GBRG16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_GBRG16BE => Self::BAYER_GBRG16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_GRBG16LE => Self::BAYER_GRBG16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_BAYER_GRBG16BE => Self::BAYER_GRBG16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_XVMC => Self::XVMC,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV440P10LE => Self::YUV440P10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV440P10BE => Self::YUV440P10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV440P12LE => Self::YUV440P12LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUV440P12BE => Self::YUV440P12BE,
+            FF::AVPixelFormat_AV_PIX_FMT_AYUV64LE => Self::AYUV64LE,
+            FF::AVPixelFormat_AV_PIX_FMT_AYUV64BE => Self::AYUV64BE,
+            FF::AVPixelFormat_AV_PIX_FMT_VIDEOTOOLBOX => Self::VIDEOTOOLBOX,
+            FF::AVPixelFormat_AV_PIX_FMT_P010LE => Self::P010LE,
+            FF::AVPixelFormat_AV_PIX_FMT_P010BE => Self::P010BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRAP12BE => Self::GBRAP12BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRAP12LE => Self::GBRAP12LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRAP10BE => Self::GBRAP10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRAP10LE => Self::GBRAP10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_MEDIACODEC => Self::MEDIACODEC,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY12BE => Self::GRAY12BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY12LE => Self::GRAY12LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY10BE => Self::GRAY10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY10LE => Self::GRAY10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_P016LE => Self::P016LE,
+            FF::AVPixelFormat_AV_PIX_FMT_P016BE => Self::P016BE,
+            FF::AVPixelFormat_AV_PIX_FMT_D3D11 => Self::D3D11,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY9BE => Self::GRAY9BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY9LE => Self::GRAY9LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRPF32BE => Self::GBRPF32BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRPF32LE => Self::GBRPF32LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRAPF32BE => Self::GBRAPF32BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRAPF32LE => Self::GBRAPF32LE,
+            FF::AVPixelFormat_AV_PIX_FMT_DRM_PRIME => Self::DRM_PRIME,
+            FF::AVPixelFormat_AV_PIX_FMT_OPENCL => Self::OPENCL,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY14BE => Self::GRAY14BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAY14LE => Self::GRAY14LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAYF32BE => Self::GRAYF32BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GRAYF32LE => Self::GRAYF32LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA422P12BE => Self::YUVA422P12BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA422P12LE => Self::YUVA422P12LE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA444P12BE => Self::YUVA444P12BE,
+            FF::AVPixelFormat_AV_PIX_FMT_YUVA444P12LE => Self::YUVA444P12LE,
+            FF::AVPixelFormat_AV_PIX_FMT_NV24 => Self::NV24,
+            FF::AVPixelFormat_AV_PIX_FMT_NV42 => Self::NV42,
+            FF::AVPixelFormat_AV_PIX_FMT_VULKAN => Self::VULKAN,
+            FF::AVPixelFormat_AV_PIX_FMT_Y210BE => Self::Y210BE,
+            FF::AVPixelFormat_AV_PIX_FMT_Y210LE => Self::Y210LE,
+            FF::AVPixelFormat_AV_PIX_FMT_X2RGB10LE => Self::X2RGB10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_X2RGB10BE => Self::X2RGB10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_X2BGR10LE => Self::X2BGR10LE,
+            FF::AVPixelFormat_AV_PIX_FMT_X2BGR10BE => Self::X2BGR10BE,
+            FF::AVPixelFormat_AV_PIX_FMT_P210BE => Self::P210BE,
+            FF::AVPixelFormat_AV_PIX_FMT_P210LE => Self::P210LE,
+            FF::AVPixelFormat_AV_PIX_FMT_P410BE => Self::P410BE,
+            FF::AVPixelFormat_AV_PIX_FMT_P410LE => Self::P410LE,
+            FF::AVPixelFormat_AV_PIX_FMT_P216BE => Self::P216BE,
+            FF::AVPixelFormat_AV_PIX_FMT_P216LE => Self::P216LE,
+            FF::AVPixelFormat_AV_PIX_FMT_P416BE => Self::P416BE,
+            FF::AVPixelFormat_AV_PIX_FMT_P416LE => Self::P416LE,
+            FF::AVPixelFormat_AV_PIX_FMT_VUYA => Self::VUYA,
+            FF::AVPixelFormat_AV_PIX_FMT_RGBAF16BE => Self::RGBAF16BE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGBAF16LE => Self::RGBAF16LE,
+            FF::AVPixelFormat_AV_PIX_FMT_VUYX => Self::VUYX,
+            FF::AVPixelFormat_AV_PIX_FMT_P012LE => Self::P012LE,
+            FF::AVPixelFormat_AV_PIX_FMT_P012BE => Self::P012BE,
+            FF::AVPixelFormat_AV_PIX_FMT_Y212BE => Self::Y212BE,
+            FF::AVPixelFormat_AV_PIX_FMT_Y212LE => Self::Y212LE,
+            FF::AVPixelFormat_AV_PIX_FMT_XV30BE => Self::XV30BE,
+            FF::AVPixelFormat_AV_PIX_FMT_XV30LE => Self::XV30LE,
+            FF::AVPixelFormat_AV_PIX_FMT_XV36BE => Self::XV36BE,
+            FF::AVPixelFormat_AV_PIX_FMT_XV36LE => Self::XV36LE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGBF32BE => Self::RGBF32BE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGBF32LE => Self::RGBF32LE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGBAF32BE => Self::RGBAF32BE,
+            FF::AVPixelFormat_AV_PIX_FMT_RGBAF32LE => Self::RGBAF32LE,
+            FF::AVPixelFormat_AV_PIX_FMT_P212BE => Self::P212BE,
+            FF::AVPixelFormat_AV_PIX_FMT_P212LE => Self::P212LE,
+            FF::AVPixelFormat_AV_PIX_FMT_P412BE => Self::P412BE,
+            FF::AVPixelFormat_AV_PIX_FMT_P412LE => Self::P412LE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRAP14BE => Self::GBRAP14BE,
+            FF::AVPixelFormat_AV_PIX_FMT_GBRAP14LE => Self::GBRAP14LE,
+            FF::AVPixelFormat_AV_PIX_FMT_NB => Self::NB,
+            _ => Self::NONE,
+        }
+    }
+}
+
 pub struct AVFrame {
     row: *mut FF::AVFrame,
+    has_image: bool,
 }
 
 impl Default for AVFrame {
@@ -748,13 +1232,143 @@ impl Default for AVFrame {
             panic!("Error on av_frame_alloc, possibile low memory!");
         }
 
-        Self { row }
+        Self {
+            row,
+            has_image: false,
+        }
+    }
+}
+
+impl AVFrame {
+    pub fn with_image(width: i32, height: i32, format: AVPixelFormat) -> Result<Self, AVError> {
+        let mut row = unsafe { FF::av_frame_alloc() };
+
+        if row.is_null() {
+            panic!("Error on av_frame_alloc, possibile low memory!");
+        }
+
+        let res = unsafe {
+            FF::av_image_alloc(
+                &mut (*row).data as _,
+                &mut (*row).linesize as _,
+                width,
+                height,
+                format as i32,
+                1,
+            )
+        };
+
+        if res < 0 {
+            unsafe { FF::av_frame_free(&mut row) };
+            return Err(AVError::from(res));
+        }
+
+        unsafe {
+            (*row).width = width;
+            (*row).height = height;
+            (*row).format = format as i32;
+        }
+
+        Ok(Self {
+            row,
+            has_image: true,
+        })
+    }
+
+    pub fn width(&self) -> i32 {
+        unsafe { (*self.row).width }
+    }
+
+    pub fn height(&self) -> i32 {
+        unsafe { (*self.row).height }
+    }
+
+    pub fn format(&self) -> AVPixelFormat {
+        AVPixelFormat::from(unsafe { (*self.row).format })
+    }
+
+    pub fn data(&self) -> [&[u8]; 8] {
+        unsafe {
+            let row = self.row;
+            let height = self.height() as usize;
+            use core::slice::from_raw_parts as slice_from;
+            [
+                slice_from((*row).data[0], (*row).linesize[0] as usize * height),
+                slice_from((*row).data[1], (*row).linesize[1] as usize * height),
+                slice_from((*row).data[2], (*row).linesize[2] as usize * height),
+                slice_from((*row).data[3], (*row).linesize[3] as usize * height),
+                slice_from((*row).data[4], (*row).linesize[4] as usize * height),
+                slice_from((*row).data[5], (*row).linesize[5] as usize * height),
+                slice_from((*row).data[6], (*row).linesize[6] as usize * height),
+                slice_from((*row).data[7], (*row).linesize[7] as usize * height),
+            ]
+        }
     }
 }
 
 impl Drop for AVFrame {
     fn drop(&mut self) {
+        if self.has_image {
+            unsafe { FF::av_freep(&mut (*self.row).data as *mut _ as *mut core::ffi::c_void) }
+        }
         unsafe { FF::av_frame_free(&mut self.row) }
+    }
+}
+
+pub struct SwsContext {
+    row: *mut FF::SwsContext,
+}
+
+impl SwsContext {
+    pub fn from_frame(frame: &AVFrame, dst: &AVFrame) -> Self {
+        let row;
+        unsafe {
+            row = FF::sws_getContext(
+                frame.width(),
+                frame.height(),
+                frame.format() as i32,
+                dst.width(),
+                dst.height(),
+                dst.format() as i32,
+                0,
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                core::ptr::null(),
+            );
+        }
+
+        if row.is_null() {
+            panic!("Error on sws_getContext");
+        }
+
+        Self { row }
+    }
+
+    pub fn sws_scale(&self, from: &AVFrame, to: &mut AVFrame) -> Result<(), AVError> {
+        let res;
+        unsafe {
+            res = FF::sws_scale(
+                self.row,
+                (*from.row).data.as_ptr() as *const *const u8,
+                (*from.row).linesize.as_ptr(),
+                0,
+                1080,
+                (*to.row).data.as_mut_ptr(),
+                (*to.row).linesize.as_mut_ptr(),
+            );
+        }
+
+        if res < 0 {
+            return Err(AVError::from(res));
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for SwsContext {
+    fn drop(&mut self) {
+        unsafe { FF::sws_freeContext(self.row) }
     }
 }
 
@@ -765,6 +1379,10 @@ pub struct AVPacket {
 impl AVPacket {
     pub fn stream_index(&self) -> i32 {
         unsafe { (*self.row).stream_index }
+    }
+
+    pub fn size(&self) -> i32 {
+        unsafe { (*self.row).size }
     }
 }
 
@@ -933,7 +1551,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let gcx = GCX::new(Rc::new(gl));
 
-    let texture = unsafe { gcx.gl.create_texture().unwrap() };
+    let mut texture = gcx.create_texture(
+        TextureType::Tex2D,
+        TextureTarget::Tex2D,
+        0,
+        InternalFormat::RGBA8,
+        1920,
+        1080,
+        Format::RGBA,
+        motion_man::gcx::DataType::U8,
+        &[0u32; 1920 * 1080],
+    );
 
     let v_buffer = gcx.create_buffer(
         motion_man::gcx::buffer::BufferType::ArrayBuffer,
@@ -976,9 +1604,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build(&gcx)
         .unwrap();
 
-    let version = unsafe { FF::avformat_version() };
-    println!("AVFormat Version: {version}");
-
     let mut format_ctx = AVFormatContext::new(CString::new("video.mkv").unwrap()).unwrap();
 
     let mut streams = format_ctx.streams();
@@ -999,34 +1624,68 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut ctx = ctx.unwrap();
-    let dst;
+    let mut dst = AVFrame::with_image(1920, 1080, AVPixelFormat::RGB24).unwrap();
 
-    unsafe {
-        dst = FF::av_frame_alloc();
-
-        let res = FF::av_image_alloc(
-            &mut (*dst).data as _,
-            &mut (*dst).linesize as _,
-            1920,
-            1080,
-            FF::AVPixelFormat_AV_PIX_FMT_RGB24,
-            1,
-        );
-
-        if res < 0 {
-            panic!("{:?}", AVError::from(res));
+    loop {
+        if let Ok(()) = format_ctx.read_frame(&mut packet) {
+            if packet.stream_index() == 0 {
+                ctx.send_packet(&packet);
+                if let Ok(()) = ctx.receive_frame(&mut frame) {
+                    break;
+                }
+            }
+        } else {
+            return Ok(());
         }
-
-        (*dst).width = 1920;
-        (*dst).height = 1080;
-        (*dst).format = FF::AVPixelFormat_AV_PIX_FMT_RGB24;
     }
+
+    let width = frame.width();
+    let height = frame.height();
+
+    _ = window.request_inner_size(LogicalSize::new(width / 2, height / 2));
+    surface.resize(
+        &context,
+        (width as u32 / 2).try_into().unwrap(),
+        (height as u32 / 2).try_into().unwrap(),
+    );
 
     loop {
         let start = Instant::now();
+
+        let sws = SwsContext::from_frame(&frame, &dst);
+        sws.sws_scale(&frame, &mut dst).unwrap();
+
+        gcx.clear_color(0xff);
+        gcx.clear(BufferBit::COLOR);
+
+        let mut buffer = vec![0u32; width as usize * height as usize];
+
+        let mut i = 0;
+        let data = dst.data();
+        while i < data[0].len() {
+            let r = data[0][i] as u32;
+            let g = data[0][i + 1] as u32;
+            let b = data[0][i + 2] as u32;
+
+            buffer[i as usize / 3] = 0xff000000 + r + (g << 8) + (b << 16);
+            i += 3;
+        }
+
+        gcx.viewport(0, 0, 1920 / 2, 1080 / 2);
+
+        gcx.use_shader(&shader, |gcx| {
+            gcx.use_vertex_array(&vao, |gcx| {
+                texture.update(0, &buffer);
+                texture.activate(0);
+                shader.set_uniform("IMAGE", 0).unwrap();
+                gcx.draw_arrays(motion_man::gcx::PrimitiveType::TrianglesFan, 0, 4);
+            });
+        });
+
+        surface.swap_buffers(&context).unwrap();
+
         loop {
             if let Ok(()) = format_ctx.read_frame(&mut packet) {
-                let pos = unsafe { (*packet.row).size };
                 if packet.stream_index() == 0 {
                     ctx.send_packet(&packet);
                     if let Ok(()) = ctx.receive_frame(&mut frame) {
@@ -1038,94 +1697,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        unsafe {
-            let row = frame.row;
-
-            let sws = FF::sws_getContext(
-                (*row).width,
-                (*row).height,
-                (*row).format,
-                1920,
-                1080,
-                (*dst).format,
-                0,
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-                core::ptr::null(),
-            );
-
-            FF::sws_scale(
-                sws,
-                (*row).data.as_ptr() as *const *const u8,
-                (*row).linesize.as_ptr(),
-                0,
-                1080,
-                (*dst).data.as_mut_ptr(),
-                (*dst).linesize.as_mut_ptr(),
-            );
-        }
-
-        gcx.clear_color(0xff);
-        gcx.clear(BufferBit::COLOR);
-
-        unsafe {
-            let width = (*frame.row).width;
-            let height = (*frame.row).height;
-            let format = (*frame.row).format;
-
-            _ = window.request_inner_size(LogicalSize::new(width / 2, height / 2));
-            surface.resize(
-                &context,
-                (width as u32 / 2).try_into().unwrap(),
-                (height as u32 / 2).try_into().unwrap(),
-            );
-
-            let mut buffer = vec![0u32; width as usize * height as usize];
-
-            let mut i = 0;
-            loop {
-                let data = (*dst).data;
-                let r = *data[0].offset(i) as u32;
-                let g = *data[0].offset(i + 1) as u32;
-                let b = *data[0].offset(i + 2) as u32;
-
-                buffer[i as usize / 3] = 0xff000000 + r + (g << 8) + (b << 16);
-
-                i += 3;
-                if i >= width as isize * height as isize * 3 {
-                    break;
-                }
-            }
-
-            gcx.viewport(0, 0, 1920 / 2, 1080 / 2);
-
-            gcx.use_shader(&shader, |gcx| {
-                gcx.use_vertex_array(&vao, |gcx| {
-                    gcx.gl.bind_texture(GL::TEXTURE_2D, Some(texture));
-                    gcx.gl.tex_image_2d(
-                        GL::TEXTURE_2D,
-                        0,
-                        GL::RGBA as i32,
-                        width,
-                        height,
-                        0,
-                        GL::RGBA,
-                        GL::UNSIGNED_BYTE,
-                        Some(bytemuck::cast_slice(&buffer)),
-                    );
-                    gcx.gl.generate_mipmap(GL::TEXTURE_2D);
-                    // gcx.gl.active_texture(GL::TEXTURE0);
-                    let location = gcx
-                        .gl
-                        .get_uniform_location(shader.program, "IMAGE")
-                        .unwrap();
-                    gcx.gl.uniform_1_i32(Some(&location), 0);
-                    gcx.draw_arrays(motion_man::gcx::PrimitiveType::TrianglesFan, 0, 4);
-                });
-            });
-        }
-
-        surface.swap_buffers(&context).unwrap();
         if let Some(wait) = Duration::from_secs_f64(1. / 60.).checked_sub(start.elapsed()) {
             std::thread::sleep(wait);
         } else {

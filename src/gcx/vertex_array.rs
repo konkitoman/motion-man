@@ -2,6 +2,7 @@ use GL::HasContext;
 
 use super::{
     buffer::{Buffer, BufferType},
+    texture::Texture,
     GCX, GL,
 };
 use std::rc::Rc;
@@ -11,7 +12,8 @@ pub struct VertexArray {
     pub(super) gl: Rc<glow::Context>,
     pub(super) vao: GL::VertexArray,
 
-    pub(crate) array_buffer: Buffer,
+    // pub textures: Vec<Texture>,
+    pub array_buffer: Buffer,
 }
 
 impl Drop for VertexArray {

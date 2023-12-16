@@ -1,5 +1,6 @@
 pub mod buffer;
 pub mod shader;
+pub mod texture;
 pub mod vertex_array;
 
 use std::rc::Rc;
@@ -12,8 +13,21 @@ use crate::color::Color;
 use self::{
     buffer::{Buffer, BufferInner, BufferType, BufferUsage},
     shader::{Shader, ShaderBuilder},
+    texture::{Format, InternalFormat, Texture, TextureInner, TextureTarget},
     vertex_array::{Fields, VertexArray, VertexArrayBuilder},
 };
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u32)]
+pub enum DataType {
+    U8 = GL::UNSIGNED_BYTE,
+    U16 = GL::UNSIGNED_SHORT,
+    U32 = GL::UNSIGNED_INT,
+    I8 = GL::BYTE,
+    I16 = GL::SHORT,
+    I32 = GL::INT,
+    F32 = GL::FLOAT,
+}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -102,6 +116,54 @@ impl GCX {
         let gl = gl.clone();
         Buffer {
             inner: Rc::new(BufferInner { gl, buffer, ty }),
+        }
+    }
+
+    pub fn create_texture<T: bytemuck::NoUninit>(
+        &self,
+        ty: texture::TextureType,
+        target: TextureTarget,
+        level: i32,
+        internal_format: InternalFormat,
+        width: i32,
+        height: i32,
+        format: Format,
+        data_ty: DataType,
+        data: &[T],
+    ) -> Texture {
+        let gl = &self.gl;
+        let row;
+        unsafe {
+            row = gl.create_texture().unwrap();
+
+            gl.bind_texture(target as u32, Some(row));
+            gl.tex_image_2d(
+                target as u32,
+                level,
+                internal_format as i32,
+                width,
+                height,
+                0,
+                format as u32,
+                data_ty as u32,
+                Some(bytemuck::cast_slice(data)),
+            );
+            gl.generate_mipmap(target as u32);
+            gl.bind_texture(target as u32, None);
+        }
+
+        Texture {
+            inner: Rc::new(TextureInner {
+                gl: gl.clone(),
+                row,
+                format,
+                internal_format,
+                ty,
+                width,
+                height,
+                target,
+                data_ty,
+            }),
         }
     }
 
