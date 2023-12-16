@@ -2,6 +2,7 @@ pub mod color;
 pub mod element;
 pub mod engine;
 pub mod engine_message;
+pub mod ffmpeg;
 pub mod gcx;
 pub mod info;
 pub mod node;

@@ -130,7 +130,7 @@ impl Texture {
         self.inner.data_ty
     }
 
-    pub fn update<T: bytemuck::NoUninit>(&mut self, level: i32, data: &[T]) {
+    pub fn update<T: bytemuck::NoUninit>(&self, level: i32, data: &[T]) {
         let row = self.inner.row;
         let gl = &self.inner.gl;
         let target = self.target();
@@ -158,7 +158,7 @@ impl Texture {
         }
     }
 
-    pub fn activate(&mut self, unit: u32) {
+    pub fn activate(&self, unit: u32) {
         unsafe {
             self.inner.gl.active_texture(GL::TEXTURE0 + unit);
             self.inner
