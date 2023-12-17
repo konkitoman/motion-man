@@ -31,7 +31,7 @@ impl<'a> Tween<'a> {
 
 pub enum TweenBuilderStage<'a> {
     Init {
-        task: &'a mut SceneTask,
+        task: &'a SceneTask,
         tweens: Vec<Tween<'a>>,
     },
     Running(Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>>),
@@ -42,7 +42,7 @@ pub struct TweenBuilder<'a> {
 }
 
 impl<'a> TweenBuilder<'a> {
-    pub fn new(task: &'a mut SceneTask, tween: Tween<'a>) -> Self {
+    pub fn new(task: &'a SceneTask, tween: Tween<'a>) -> Self {
         Self {
             stage: Some(TweenBuilderStage::Init {
                 task,

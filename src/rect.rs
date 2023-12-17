@@ -12,6 +12,7 @@ use crate::{
         PrimitiveType, GCX,
     },
     node::Node,
+    scene::SceneTask,
 };
 
 #[derive(Debug)]
@@ -36,18 +37,20 @@ impl RectBuilder {
     }
 }
 
-pub struct RectRef {
+pub struct Rect<'a> {
     sender: Sender<ElementMessage>,
+    scene: &'a SceneTask,
+    droped: bool,
 }
 
-impl RectRef {
-    pub fn set_size(&mut self, size: [f32; 2]) {
+impl<'a> Rect<'a> {
+    pub fn set_size(&self, size: [f32; 2]) {
         self.sender
             .try_send(ElementMessage::Set(0, Box::new(size)))
             .unwrap();
     }
 
-    pub fn set_color(&mut self, color: impl Into<Color>) {
+    pub fn set_color(&self, color: impl Into<Color>) {
         if self
             .sender
             .try_send(ElementMessage::Set(1, Box::new(color.into())))
@@ -58,29 +61,59 @@ impl RectRef {
         }
     }
 
-    pub fn set_position(&mut self, position: [f32; 2]) {
+    pub fn set_position(&self, position: [f32; 2]) {
         self.sender
             .try_send(ElementMessage::Set(2, Box::new(position)))
             .unwrap();
     }
+
+    pub async fn drop(mut self) {
+        self.scene.submit().await;
+        self.sender
+            .send(ElementMessage::Set(21, Box::new(())))
+            .await
+            .unwrap();
+        self.scene.submit().await;
+        self.droped = true;
+    }
+}
+
+impl<'a> Drop for Rect<'a> {
+    fn drop(&mut self) {
+        if self.droped {
+            return;
+        }
+
+        eprintln!("You need to call drop on Rect when you are done with it!");
+        std::process::abort();
+    }
 }
 
 impl ElementBuilder for RectBuilder {
-    type ElementRef = RectRef;
+    type ElementRef<'a> = Rect<'a>;
 
     fn node_id(&self) -> TypeId {
         core::any::TypeId::of::<RectNode>()
     }
 
-    fn create_element_ref(&self, sender: Sender<ElementMessage>) -> Self::ElementRef {
-        RectRef { sender }
+    fn create_element_ref<'a>(
+        &self,
+        sender: Sender<ElementMessage>,
+        scene: &'a SceneTask,
+    ) -> Self::ElementRef<'a> {
+        Rect {
+            sender,
+            scene,
+            droped: false,
+        }
     }
 }
 
 #[derive(Default, Debug)]
 pub struct RectNode {
-    pub(super) rects: Vec<(VertexArray, RectBuilder)>,
-    pub(super) receivers: Vec<Receiver<ElementMessage>>,
+    pub(super) rects: Vec<(VertexArray, RectBuilder, u64)>,
+    pub(super) receivers: Vec<(u64, Receiver<ElementMessage>)>,
+    counter: u64,
     pub(super) shader: Option<Shader>,
 }
 
@@ -145,11 +178,12 @@ impl Node for RectNode {
     fn init_element(&mut self, gcx: &GCX, builder: Self::ElementBuilder) {
         let buffer = gcx.create_buffer(
             BufferType::ArrayBuffer,
-            &Self::build_mesh(builder.size, builder.position, builder.color),
+            &Self::build_mesh(&builder),
             BufferUsage::DRAW_STATIC,
         );
         let vao = gcx.create_vertex_array::<RectVertex>(buffer).build(gcx);
-        self.rects.push((vao, builder));
+        self.rects.push((vao, builder, self.counter));
+        self.counter += 1;
     }
 
     fn render(&self, gcx: &GCX) {
@@ -165,62 +199,64 @@ impl Node for RectNode {
 
     fn create_ref(&mut self) -> Sender<ElementMessage> {
         let (send, recv) = channel(1);
-        self.receivers.push(recv);
+        self.receivers.push((self.counter, recv));
         send
     }
 
     fn update(&mut self) {
-        for (i, recv) in self.receivers.iter_mut().enumerate() {
+        self.receivers.retain_mut(|(id, recv)| {
             if let Ok(msg) = recv.try_recv() {
                 match msg {
                     ElementMessage::Set(0, data) => {
-                        let Ok(size) = data.downcast::<[f32; 2]>() else {
-                            continue;
-                        };
-                        let color = self.rects[i].1.color;
-                        let position = self.rects[i].1.position;
-                        self.rects[i]
-                            .0
-                            .array_buffer
-                            .update(0, &Self::build_mesh(*size, position, color));
-                        self.rects[i].1.size = *size;
+                        let size = data.downcast::<[f32; 2]>().unwrap();
+                        for rect in self.rects.iter_mut() {
+                            if rect.2 == *id {
+                                rect.1.size = *size;
+                                rect.0.array_buffer.update(0, &Self::build_mesh(&rect.1));
+                                break;
+                            }
+                        }
                     }
 
                     ElementMessage::Set(1, data) => {
-                        let Ok(color) = data.downcast::<Color>() else {
-                            continue;
-                        };
-                        let size = self.rects[i].1.size;
-                        let position = self.rects[i].1.position;
-                        self.rects[i]
-                            .0
-                            .array_buffer
-                            .update(0, &Self::build_mesh(size, position, *color));
-                        self.rects[i].1.color = *color;
+                        let color = data.downcast::<Color>().unwrap();
+                        for rect in self.rects.iter_mut() {
+                            if rect.2 == *id {
+                                rect.1.color = *color;
+                                rect.0.array_buffer.update(0, &Self::build_mesh(&rect.1));
+                                break;
+                            }
+                        }
                     }
 
                     ElementMessage::Set(2, data) => {
-                        let Ok(position) = data.downcast::<[f32; 2]>() else {
-                            continue;
-                        };
-                        let size = self.rects[i].1.size;
-                        let color = self.rects[i].1.color;
-                        self.rects[i]
-                            .0
-                            .array_buffer
-                            .update(0, &Self::build_mesh(size, *position, color));
-                        self.rects[i].1.position = *position;
+                        let position = data.downcast::<[f32; 2]>().unwrap();
+                        for rect in self.rects.iter_mut() {
+                            if rect.2 == *id {
+                                rect.1.position = *position;
+                                rect.0.array_buffer.update(0, &Self::build_mesh(&rect.1));
+                                break;
+                            }
+                        }
+                    }
+                    ElementMessage::Set(21, _) => {
+                        self.rects.retain(|rect| rect.2 != *id);
+                        return false;
                     }
 
-                    _ => continue,
+                    _ => {}
                 }
             }
-        }
+            true
+        });
     }
 }
 
 impl RectNode {
-    fn build_mesh(size: [f32; 2], position: [f32; 2], color: Color) -> [RectVertex; 4] {
+    fn build_mesh(builder: &RectBuilder) -> [RectVertex; 4] {
+        let color = builder.color;
+        let size = builder.size;
+        let position = builder.position;
         [
             RectVertex {
                 position: [-size[0] + position[0], -size[1] + position[1]],

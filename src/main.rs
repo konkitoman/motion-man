@@ -2,7 +2,9 @@ use std::{
     borrow::Cow,
     error::Error,
     ffi::{CStr, CString},
+    future::Future,
     path::Path,
+    pin::Pin,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -208,37 +210,88 @@ mod video {
     }
 
     impl ElementBuilder for VideoBuilder {
-        type ElementRef = Video;
+        type ElementRef<'a> = Video<'a>;
 
         fn node_id(&self) -> std::any::TypeId {
             TypeId::of::<VideoNode>()
         }
 
-        fn create_element_ref(&self, sender: Sender<ElementMessage>) -> Self::ElementRef {
-            Video { sender }
+        fn create_element_ref<'a>(
+            &self,
+            sender: Sender<ElementMessage>,
+            scene: &'a SceneTask,
+        ) -> Self::ElementRef<'a> {
+            Video {
+                sender,
+                scene,
+                droped: false,
+            }
         }
     }
 
-    pub struct Video {
+    pub struct Video<'a> {
         sender: Sender<ElementMessage>,
+        scene: &'a SceneTask,
+        droped: bool,
     }
 
-    impl Video {
-        pub fn step(&self) {
+    impl<'a> Drop for Video<'a> {
+        fn drop(&mut self) {
+            if self.droped {
+                return;
+            }
+            eprintln!("You need to call on a Video, drop() when is no more needed");
+            std::process::abort();
+        }
+    }
+
+    impl<'a> Video<'a> {
+        pub async fn step(&self) {
+            self.scene.submit().await;
             self.sender
-                .try_send(ElementMessage::Set(0, Box::new(())))
+                .send(ElementMessage::Set(0, Box::new(())))
+                .await
                 .unwrap();
+            self.scene.submit().await;
         }
 
-        pub async fn is_finished(&self, scene: &mut SceneTask) -> bool {
+        pub async fn set_position(&self, pos: [f32; 2]) {
+            self.scene.submit().await;
+            self.sender
+                .send(ElementMessage::Set(2, Box::new(pos)))
+                .await
+                .unwrap();
+            self.scene.submit().await;
+        }
+
+        pub async fn set_size(&self, scale: [f32; 2]) {
+            self.scene.submit().await;
+            self.sender
+                .send(ElementMessage::Set(3, Box::new(scale)))
+                .await
+                .unwrap();
+            self.scene.submit().await;
+        }
+
+        pub async fn is_finished(&self) -> bool {
             let (sender, receiver) = ochannel::<bool>();
-            scene.submit().await;
+            self.scene.submit().await;
             self.sender
                 .send(ElementMessage::Set(1, Box::new(sender)))
                 .await
                 .unwrap();
-            scene.submit().await;
+            self.scene.submit().await;
             receiver.await.unwrap()
+        }
+
+        pub async fn drop(mut self) {
+            self.scene.submit().await;
+            self.sender
+                .send(ElementMessage::Set(21, Box::new(())))
+                .await
+                .unwrap();
+            self.scene.submit().await;
+            self.droped = true;
         }
     }
 
@@ -451,14 +504,14 @@ mod video {
         }
 
         fn update(&mut self) {
-            'recv: for (receiver, id) in self.receivers.iter_mut() {
+            self.receivers.retain_mut(|(receiver, id)| {
                 if let Ok(msg) = receiver.try_recv() {
                     match msg {
                         ElementMessage::Set(0, _) => {
-                            for video in self.videos.iter_mut() {
+                            'video: for video in self.videos.iter_mut() {
                                 if video.id == *id {
                                     if video.finished {
-                                        continue 'recv;
+                                        break;
                                     }
 
                                     loop {
@@ -479,7 +532,7 @@ mod video {
                                             }
                                         } else {
                                             video.finished = true;
-                                            continue 'recv;
+                                            break 'video;
                                         }
                                     }
 
@@ -512,10 +565,41 @@ mod video {
                                 }
                             }
                         }
+                        ElementMessage::Set(2, pos) => {
+                            let pos = pos.downcast::<[f32; 2]>().unwrap();
+                            for video in self.videos.iter_mut() {
+                                if video.id == *id {
+                                    video.builder.pos = *pos;
+                                    video
+                                        .va
+                                        .array_buffer
+                                        .update(0, &create_mesh(&video.builder));
+                                    break;
+                                }
+                            }
+                        }
+                        ElementMessage::Set(3, size) => {
+                            let size = size.downcast::<[f32; 2]>().unwrap();
+                            for video in self.videos.iter_mut() {
+                                if video.id == *id {
+                                    video.builder.size = *size;
+                                    video
+                                        .va
+                                        .array_buffer
+                                        .update(0, &create_mesh(&video.builder));
+                                    break;
+                                }
+                            }
+                        }
+                        ElementMessage::Set(21, _) => {
+                            self.videos.retain(|v| v.id != *id);
+                            return false;
+                        }
                         _ => {}
                     }
                 }
-            }
+                true
+            });
         }
 
         fn render(&self, gcx: &motion_man::gcx::GCX) {
@@ -583,7 +667,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 })
                 .await;
 
-            let mut rect = scene
+            let rect = scene
                 .spawn_element(RectBuilder::new([1., 1.], Color::RED))
                 .await;
 
@@ -594,7 +678,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             scene.submit().await;
             scene.wait(1).await;
 
-            let mut rect2 = scene
+            let rect2 = scene
                 .spawn_element(
                     RectBuilder::new([0.5, 0.5], Color::BLUE).with_position([-0.5, -0.5]),
                 )
@@ -624,11 +708,31 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             let video = scene.spawn_element(VideoBuilder::new("video.mkv")).await;
 
-            while !video.is_finished(&mut scene).await {
-                scene.wait(1).await;
-                video.step();
+            let mut s = 0.0;
+
+            while !video.is_finished().await {
+                video.set_size([s, s]).await;
+                video.step().await;
                 scene.submit().await;
+                s += scene.info(|i| i.delta).await as f32 / 2.;
+                s = s.clamp(0.0, 1.0);
+                scene.wait(1).await;
             }
+
+            for _ in 0..120 {
+                video.set_size([s, s]).await;
+                s -= scene.info(|i| i.delta).await as f32 / 2.;
+                s = s.clamp(0.0, 1.0);
+                scene.wait(1).await;
+            }
+
+            video.drop().await;
+
+            scene.wait(60).await;
+            rect2.drop().await;
+            scene.wait(60).await;
+            rect.drop().await;
+            scene.wait(10).await;
         })
     });
 

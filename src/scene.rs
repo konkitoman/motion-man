@@ -16,7 +16,7 @@ pub struct SceneTask {
 }
 
 impl SceneTask {
-    pub async fn wait(&mut self, frames: usize) {
+    pub async fn wait(&self, frames: usize) {
         for _ in 0..frames {
             let (send, recv) = ochannel();
             let _ = self.sender.send(EngineMessage::WaitNextFrame(send)).await;
@@ -29,13 +29,16 @@ impl SceneTask {
         reader(&info)
     }
 
-    pub async fn spawn_element<T: ElementBuilder + 'static>(&self, builder: T) -> T::ElementRef {
+    pub async fn spawn_element<'a, T: ElementBuilder + 'static>(
+        &'a self,
+        builder: T,
+    ) -> T::ElementRef<'a> {
         let (send, recv) = ochannel();
         self.sender
             .send(EngineMessage::CreateRef(builder.node_id(), send))
             .await;
 
-        let element_ref = builder.create_element_ref(recv.await.unwrap());
+        let element_ref = builder.create_element_ref(recv.await.unwrap(), self);
 
         self.sender
             .send(EngineMessage::CreateElement(
@@ -47,12 +50,12 @@ impl SceneTask {
         element_ref
     }
 
-    pub async fn submit(&mut self) {
+    pub async fn submit(&self) {
         self.sender.send(EngineMessage::Submit).await;
     }
 
     pub fn tween<'a>(
-        &'a mut self,
+        &'a self,
         range: RangeInclusive<f32>,
         time: f32,
         runner: impl FnMut(f32) + 'a + Sync + Send,
