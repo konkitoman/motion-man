@@ -1,23 +1,17 @@
 use std::any::{Any, TypeId};
 
-use tokio::sync::mpsc::Sender;
-
 use crate::scene::SceneTask;
 
-pub enum ElementMessage {
-    Set(u32, Box<dyn Any + Send + Sync + 'static>),
-}
-
 pub trait ElementBuilder: core::fmt::Debug + Send + Sync {
-    type ElementRef<'a>;
+    type Element<'a>;
 
     fn node_id(&self) -> TypeId;
 
     fn create_element_ref<'a>(
         &self,
-        sender: Sender<ElementMessage>,
+        inner: Box<dyn Any + Send + Sync + 'static>,
         scene: &'a SceneTask,
-    ) -> Self::ElementRef<'a>;
+    ) -> Self::Element<'a>;
 }
 
 pub trait AbstractElementBuilder: core::fmt::Debug + Send + Sync {

@@ -1,10 +1,5 @@
 use std::{
-    borrow::Cow,
     error::Error,
-    ffi::{CStr, CString},
-    future::Future,
-    path::Path,
-    pin::Pin,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -27,12 +22,7 @@ use GL::HasContext;
 use motion_man::{
     color::Color,
     engine::Engine,
-    ffmpeg::*,
-    gcx::{
-        buffer::BufferUsage,
-        texture::{Format, InternalFormat, TextureTarget, TextureType},
-        BufferBit, GCX, GL,
-    },
+    gcx::{BufferBit, GCX, GL},
     rect::{RectBuilder, RectNode},
 };
 
@@ -43,7 +33,9 @@ pub enum SceneMessage {
     Resumed,
 }
 
-fn make_context() -> Result<
+fn make_context(
+    builder: WindowBuilder,
+) -> Result<
     (
         EventLoop<()>,
         winit::window::Window,
@@ -108,7 +100,7 @@ fn make_context() -> Result<
             .unwrap()
     };
 
-    let window = glutin_winit::finalize_window(&event_loop, WindowBuilder::new(), &config).unwrap();
+    let window = glutin_winit::finalize_window(&event_loop, builder, &config).unwrap();
 
     let surface = unsafe {
         display
@@ -173,7 +165,8 @@ mod video {
     use std::any::TypeId;
 
     use motion_man::{
-        element::{ElementBuilder, ElementMessage},
+        create_cell,
+        element::ElementBuilder,
         ffmpeg::{
             AVCodecContext, AVCodecType, AVFormatContext, AVFrame, AVPacket, AVPixelFormat,
             SwsContext,
@@ -186,11 +179,10 @@ mod video {
             DataType, GCX,
         },
         node::Node,
-        ochannel,
         scene::SceneTask,
-        OSend,
+        signal::{create_signal, NSignal, Signal, SignalInner},
+        RCell, SCell, SSAny,
     };
-    use tokio::sync::mpsc::{channel, Receiver, Sender};
 
     #[derive(Debug)]
     pub struct VideoBuilder {
@@ -210,7 +202,7 @@ mod video {
     }
 
     impl ElementBuilder for VideoBuilder {
-        type ElementRef<'a> = Video<'a>;
+        type Element<'a> = Video<'a>;
 
         fn node_id(&self) -> std::any::TypeId {
             TypeId::of::<VideoNode>()
@@ -218,20 +210,38 @@ mod video {
 
         fn create_element_ref<'a>(
             &self,
-            sender: Sender<ElementMessage>,
+            inner: Box<SSAny>,
             scene: &'a SceneTask,
-        ) -> Self::ElementRef<'a> {
+        ) -> Self::Element<'a> {
+            let (position, size, step, drop, finished): (
+                SignalInner<[f32; 2]>,
+                SignalInner<[f32; 2]>,
+                SignalInner<()>,
+                SignalInner<()>,
+                RCell<bool>,
+            ) = *inner.downcast().unwrap();
+
             Video {
-                sender,
                 scene,
                 droped: false,
+                position: Signal::new(position, scene, self.pos),
+                size: Signal::new(size, scene, self.size),
+                step: Signal::new(step, scene, ()),
+                drop: Signal::new(drop, scene, ()),
+                finished,
             }
         }
     }
 
     pub struct Video<'a> {
-        sender: Sender<ElementMessage>,
+        pub position: Signal<'a, [f32; 2]>,
+        pub size: Signal<'a, [f32; 2]>,
+        pub step: Signal<'a, ()>,
+        pub finished: RCell<bool>,
+
         scene: &'a SceneTask,
+
+        drop: Signal<'a, ()>,
         droped: bool,
     }
 
@@ -246,51 +256,8 @@ mod video {
     }
 
     impl<'a> Video<'a> {
-        pub async fn step(&self) {
-            self.scene.submit().await;
-            self.sender
-                .send(ElementMessage::Set(0, Box::new(())))
-                .await
-                .unwrap();
-            self.scene.submit().await;
-        }
-
-        pub async fn set_position(&self, pos: [f32; 2]) {
-            self.scene.submit().await;
-            self.sender
-                .send(ElementMessage::Set(2, Box::new(pos)))
-                .await
-                .unwrap();
-            self.scene.submit().await;
-        }
-
-        pub async fn set_size(&self, scale: [f32; 2]) {
-            self.scene.submit().await;
-            self.sender
-                .send(ElementMessage::Set(3, Box::new(scale)))
-                .await
-                .unwrap();
-            self.scene.submit().await;
-        }
-
-        pub async fn is_finished(&self) -> bool {
-            let (sender, receiver) = ochannel::<bool>();
-            self.scene.submit().await;
-            self.sender
-                .send(ElementMessage::Set(1, Box::new(sender)))
-                .await
-                .unwrap();
-            self.scene.submit().await;
-            receiver.await.unwrap()
-        }
-
         pub async fn drop(mut self) {
-            self.scene.submit().await;
-            self.sender
-                .send(ElementMessage::Set(21, Box::new(())))
-                .await
-                .unwrap();
-            self.scene.submit().await;
+            self.drop.set(()).await;
             self.droped = true;
         }
     }
@@ -321,7 +288,6 @@ mod video {
     }
 
     struct RVideo {
-        id: u64,
         va: VertexArray,
         builder: VideoBuilder,
         texture: Texture,
@@ -332,12 +298,12 @@ mod video {
         dst_frame: AVFrame,
         packet: AVPacket,
         sws: SwsContext,
-        buffer: Vec<u32>,
         finished: bool,
+        inner: RVideoInner,
     }
 
     impl RVideo {
-        pub fn new(id: u64, va: VertexArray, gcx: &GCX, builder: VideoBuilder) -> Self {
+        pub fn new(inner: RVideoInner, va: VertexArray, gcx: &GCX, builder: VideoBuilder) -> Self {
             let mut format_context = AVFormatContext::new(builder.url.clone()).unwrap();
             let streams = format_context.streams();
 
@@ -372,22 +338,12 @@ mod video {
             }
 
             let mut dst_frame =
-                AVFrame::with_image(frame.width(), frame.height(), AVPixelFormat::RGB24).unwrap();
+                AVFrame::with_image(frame.width(), frame.height(), AVPixelFormat::RGBA).unwrap();
             let sws = SwsContext::from_frame(&frame, &dst_frame);
             sws.sws_scale(&frame, &mut dst_frame).unwrap();
 
-            let mut buffer = vec![0u32; frame.width() as usize * frame.height() as usize];
-
             let mut i = 0;
             let data = dst_frame.data();
-            while i < data[0].len() {
-                let r = data[0][i] as u32;
-                let g = data[0][i + 1] as u32;
-                let b = data[0][i + 2] as u32;
-                let a = 255;
-                buffer[i / 3] = r + (g << 8) + (b << 16) + (a << 24);
-                i += 3;
-            }
 
             let texture = gcx.create_texture(
                 TextureType::Tex2D,
@@ -398,7 +354,7 @@ mod video {
                 frame.height(),
                 Format::RGBA,
                 DataType::U8,
-                &buffer,
+                &dst_frame.data()[0],
             );
 
             Self {
@@ -412,9 +368,8 @@ mod video {
                 dst_frame,
                 packet,
                 sws,
-                buffer,
-                id,
                 finished: false,
+                inner,
             }
         }
     }
@@ -425,13 +380,19 @@ mod video {
         }
     }
 
-    #[derive(Debug)]
+    pub struct RVideoInner {
+        finished: SCell<bool>,
+        position: NSignal<[f32; 2]>,
+        size: NSignal<[f32; 2]>,
+        step: NSignal<()>,
+        drop: NSignal<()>,
+    }
+
     pub struct VideoNode {
         videos: Vec<RVideo>,
         shader: Option<Shader>,
 
-        counter: u64,
-        receivers: Vec<(Receiver<ElementMessage>, u64)>,
+        pending: Option<RVideoInner>,
     }
 
     impl Default for VideoNode {
@@ -439,8 +400,7 @@ mod video {
             Self {
                 videos: Vec::new(),
                 shader: None,
-                receivers: Vec::new(),
-                counter: 0,
+                pending: None,
             }
         }
     }
@@ -493,111 +453,81 @@ mod video {
             let va = gcx.create_vertex_array::<Vertex>(buffer).build(gcx);
 
             self.videos
-                .push(RVideo::new(self.counter, va, gcx, builder));
-            self.counter += 1;
+                .push(RVideo::new(self.pending.take().unwrap(), va, gcx, builder));
         }
 
-        fn create_ref(&mut self) -> tokio::sync::mpsc::Sender<motion_man::element::ElementMessage> {
-            let (sender, receiver) = channel(1);
-            self.receivers.push((receiver, self.counter));
-            sender
+        fn create_element(&mut self) -> Box<SSAny> {
+            let (sposition, position) = create_signal();
+            let (ssize, size) = create_signal();
+            let (sstep, step) = create_signal();
+            let (sdrop, drop) = create_signal();
+            let (finished, rfinished) = create_cell(false);
+
+            self.pending = Some(RVideoInner {
+                finished,
+                position,
+                size,
+                step,
+                drop,
+            });
+            Box::new((sposition, ssize, sstep, sdrop, rfinished))
         }
 
         fn update(&mut self) {
-            self.receivers.retain_mut(|(receiver, id)| {
-                if let Ok(msg) = receiver.try_recv() {
-                    match msg {
-                        ElementMessage::Set(0, _) => {
-                            'video: for video in self.videos.iter_mut() {
-                                if video.id == *id {
-                                    if video.finished {
+            self.videos.retain_mut(|video| {
+                if let Some(_) = video.inner.step.get() {
+                    'video: {
+                        if video.finished {
+                            break 'video;
+                        }
+
+                        loop {
+                            if video.format_context.read_frame(&mut video.packet).is_ok() {
+                                if video.packet.stream_index() == video.stream_index {
+                                    video.codec_context.send_packet(&video.packet);
+                                    if video.codec_context.receive_frame(&mut video.frame).is_ok() {
                                         break;
                                     }
+                                }
+                            } else {
+                                video.inner.finished.set(true);
+                                video.finished = true;
+                                break 'video;
+                            }
+                        }
 
-                                    loop {
-                                        if video
-                                            .format_context
-                                            .read_frame(&mut video.packet)
-                                            .is_ok()
-                                        {
-                                            if video.packet.stream_index() == video.stream_index {
-                                                video.codec_context.send_packet(&video.packet);
-                                                if video
-                                                    .codec_context
-                                                    .receive_frame(&mut video.frame)
-                                                    .is_ok()
-                                                {
-                                                    break;
-                                                }
-                                            }
-                                        } else {
-                                            video.finished = true;
-                                            break 'video;
-                                        }
-                                    }
+                        video
+                            .sws
+                            .sws_scale(&video.frame, &mut video.dst_frame)
+                            .unwrap();
 
-                                    video
-                                        .sws
-                                        .sws_scale(&video.frame, &mut video.dst_frame)
-                                        .unwrap();
-
-                                    let mut i = 0;
-                                    let data = video.dst_frame.data();
-                                    while i < data[0].len() {
-                                        let r = data[0][i] as u32;
-                                        let g = data[0][i + 1] as u32;
-                                        let b = data[0][i + 2] as u32;
-                                        let a = 255;
-                                        video.buffer[i / 3] = r + (g << 8) + (b << 16) + (a << 24);
-                                        i += 3;
-                                    }
-                                    video.texture.update(0, &video.buffer);
-                                    break;
-                                }
-                            }
-                        }
-                        ElementMessage::Set(1, send) => {
-                            let send = send.downcast::<OSend<bool>>().unwrap();
-                            for video in self.videos.iter() {
-                                if video.id == *id {
-                                    send.send(video.finished).unwrap();
-                                    break;
-                                }
-                            }
-                        }
-                        ElementMessage::Set(2, pos) => {
-                            let pos = pos.downcast::<[f32; 2]>().unwrap();
-                            for video in self.videos.iter_mut() {
-                                if video.id == *id {
-                                    video.builder.pos = *pos;
-                                    video
-                                        .va
-                                        .array_buffer
-                                        .update(0, &create_mesh(&video.builder));
-                                    break;
-                                }
-                            }
-                        }
-                        ElementMessage::Set(3, size) => {
-                            let size = size.downcast::<[f32; 2]>().unwrap();
-                            for video in self.videos.iter_mut() {
-                                if video.id == *id {
-                                    video.builder.size = *size;
-                                    video
-                                        .va
-                                        .array_buffer
-                                        .update(0, &create_mesh(&video.builder));
-                                    break;
-                                }
-                            }
-                        }
-                        ElementMessage::Set(21, _) => {
-                            self.videos.retain(|v| v.id != *id);
-                            return false;
-                        }
-                        _ => {}
+                        video.texture.update(0, video.dst_frame.data()[0]);
                     }
                 }
+
+                let mut rebuild = false;
+
+                if let Some(position) = video.inner.position.get() {
+                    video.builder.pos = position;
+                    rebuild = true;
+                }
+
+                if let Some(size) = video.inner.size.get() {
+                    video.builder.size = size;
+                    rebuild = true;
+                }
+
+                if let Some(_) = video.inner.drop.get() {
+                    return false;
+                }
+
+                if rebuild {
+                    video
+                        .va
+                        .array_buffer
+                        .update(0, &create_mesh(&video.builder));
+                }
+
                 true
             });
         }
@@ -647,8 +577,6 @@ mod video {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let (event_loop, window, config, context, surface, gl) = make_context()?;
-
     let rt = tokio::runtime::Builder::new_current_thread().build()?;
     let _enter = rt.enter();
 
@@ -657,7 +585,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     engine.register_node::<RectNode>();
     engine.register_node::<VideoNode>();
 
-    engine.create_scene(|mut scene| {
+    engine.create_scene(|scene| {
         Box::pin(async move {
             scene
                 .info(|info| {
@@ -667,18 +595,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 })
                 .await;
 
-            let rect = scene
+            let fps = scene.fps();
+
+            let mut rect = scene
                 .spawn_element(RectBuilder::new([1., 1.], Color::RED))
                 .await;
 
-            scene.wait(scene.info(|i| i.fps()).await).await;
+            scene.wait(fps / 2).await;
 
-            rect.set_color(Color::GREEN);
+            rect.color.set(Color::GREEN).await;
 
-            scene.submit().await;
+            scene.update().await;
             scene.wait(1).await;
 
-            let rect2 = scene
+            let mut rect2 = scene
                 .spawn_element(
                     RectBuilder::new([0.5, 0.5], Color::BLUE).with_position([-0.5, -0.5]),
                 )
@@ -686,60 +616,39 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             scene.wait(1).await;
 
-            scene
-                .tween(-0.5..=0.5, 1.0, |x| rect2.set_position([x, -0.5]))
-                .await;
+            rect2.position.tween([-0.5, -0.5], [0.5, -0.5], 1.0).await;
+            rect2.position.tween([0.5, -0.5], [0.5, 0.5], 1.0).await;
+            rect2.position.tween([0.5, 0.5], [-0.5, 0.5], 1.0).await;
+            rect2.position.tween([-0.5, 0.5], [-0.5, -0.5], 1.0).await;
+            rect2.position.tween([-0.5, -0.5], [0., 0.], 1.0).await;
 
-            scene
-                .tween(-0.5..=0.5, 1.0, |y| rect2.set_position([0.5, y]))
-                .await;
+            let mut video = scene.spawn_element(VideoBuilder::new("video.mkv")).await;
 
-            scene
-                .tween(0.5..=-0.5, 1.0, |x| rect2.set_position([x, 0.5]))
-                .await;
+            video.size.tween([0., 0.], [1., 1.], 1.0).await;
 
-            scene
-                .tween(0.5..=-0.5, 1.0, |y| rect2.set_position([-0.5, y]))
-                .await;
-
-            scene
-                .tween(-0.5..=0.0, 1.0, |i| rect2.set_position([i, i]))
-                .await;
-
-            let video = scene.spawn_element(VideoBuilder::new("video.mkv")).await;
-
-            let mut s = 0.0;
-
-            while !video.is_finished().await {
-                video.set_size([s, s]).await;
-                video.step().await;
-                scene.submit().await;
-                s += scene.info(|i| i.delta).await as f32 / 2.;
-                s = s.clamp(0.0, 1.0);
+            while !video.finished.get() {
+                video.step.set(()).await;
                 scene.wait(1).await;
             }
 
-            for _ in 0..120 {
-                video.set_size([s, s]).await;
-                s -= scene.info(|i| i.delta).await as f32 / 2.;
-                s = s.clamp(0.0, 1.0);
-                scene.wait(1).await;
-            }
+            video.size.tween([1., 1.], [0.1, 0.1], 1.0).await;
 
             video.drop().await;
 
-            scene.wait(60).await;
+            rect2.size.tween([0.5, 0.5], [0., 0.], 1.0).await;
             rect2.drop().await;
-            scene.wait(60).await;
+
+            rect.size.tween([1., 1.], [0., 0.], 1.0).await;
             rect.drop().await;
-            scene.wait(10).await;
         })
     });
 
-    let gcx = GCX::new(Rc::new(gl));
-
     let width = engine.info.try_read().unwrap().width;
     let height = engine.info.try_read().unwrap().height;
+
+    let (event_loop, window, config, context, surface, gl) =
+        make_context(WindowBuilder::new().with_title("Motion Man"))?;
+    let gcx = GCX::new(Rc::new(gl));
     _ = window.request_inner_size(LogicalSize::new(width.get(), height.get()));
     surface.resize(&context, width, height);
     gcx.viewport(0, 0, width.get() as i32, height.get() as i32);

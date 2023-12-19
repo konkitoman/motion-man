@@ -2,7 +2,7 @@ use std::any::{Any, TypeId};
 
 use tokio::sync::mpsc::Sender;
 
-use crate::{element::ElementMessage, gcx::GCX};
+use crate::gcx::GCX;
 
 pub trait Node {
     type ElementBuilder;
@@ -10,17 +10,17 @@ pub trait Node {
     fn init(&mut self, gcx: &GCX);
 
     fn init_element(&mut self, gcx: &GCX, builder: Self::ElementBuilder);
-    fn create_ref(&mut self) -> Sender<ElementMessage>;
+    fn create_element(&mut self) -> Box<dyn Any + Send + Sync + 'static>;
 
     fn update(&mut self);
     fn render(&self, gcx: &GCX);
 }
 
-pub trait AbstractNode: core::fmt::Debug {
+pub trait AbstractNode {
     fn init(&mut self, gcx: &GCX);
     fn init_element(&mut self, gcx: &GCX, builder: Box<dyn Any + Send + Sync + 'static>);
 
-    fn create_ref(&mut self) -> Sender<ElementMessage>;
+    fn create_element(&mut self) -> Box<dyn Any + Send + Sync + 'static>;
 
     fn update(&mut self);
     fn render(&self, gcx: &GCX);
@@ -28,7 +28,7 @@ pub trait AbstractNode: core::fmt::Debug {
     fn ty_id(&self) -> TypeId;
 }
 
-impl<T: Node + core::fmt::Debug + 'static> AbstractNode for T {
+impl<T: Node + 'static> AbstractNode for T {
     fn init(&mut self, gcx: &GCX) {
         self.init(gcx)
     }
@@ -38,8 +38,8 @@ impl<T: Node + core::fmt::Debug + 'static> AbstractNode for T {
         self.init_element(gcx, *builder);
     }
 
-    fn create_ref(&mut self) -> Sender<ElementMessage> {
-        self.create_ref()
+    fn create_element(&mut self) -> Box<dyn Any + Send + Sync + 'static> {
+        self.create_element()
     }
 
     fn update(&mut self) {

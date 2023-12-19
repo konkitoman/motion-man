@@ -111,7 +111,6 @@ impl Engine {
         loop {
             tokio::task::yield_now().await;
             if let Ok((from, msg)) = self.receiver.try_recv() {
-                println!("From: {from}, {msg:?}");
                 match msg {
                     EngineMessage::WaitNextFrame(send) => {
                         self.waiting.push(send);
@@ -127,8 +126,7 @@ impl Engine {
                     EngineMessage::CreateRef(type_id, send) => {
                         for node in self.nodes.iter_mut() {
                             if node.ty_id() == type_id {
-                                let s = node.create_ref();
-                                send.send(s).unwrap();
+                                send.send(node.create_element()).unwrap();
                                 break;
                             }
                         }
@@ -148,7 +146,5 @@ impl Engine {
                 break;
             }
         }
-
-        println!("Scenes in processing: {}", self.scenes.len());
     }
 }

@@ -29,10 +29,18 @@ impl SceneTask {
         reader(&info)
     }
 
+    pub fn fps(&self) -> usize {
+        self.info.try_read().unwrap().fps()
+    }
+
+    pub fn delta(&self) -> f64 {
+        self.info.try_read().unwrap().delta
+    }
+
     pub async fn spawn_element<'a, T: ElementBuilder + 'static>(
         &'a self,
         builder: T,
-    ) -> T::ElementRef<'a> {
+    ) -> T::Element<'a> {
         let (send, recv) = ochannel();
         self.sender
             .send(EngineMessage::CreateRef(builder.node_id(), send))
@@ -50,7 +58,7 @@ impl SceneTask {
         element_ref
     }
 
-    pub async fn submit(&self) {
+    pub async fn update(&self) {
         self.sender.send(EngineMessage::Submit).await;
     }
 

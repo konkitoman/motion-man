@@ -92,7 +92,7 @@ impl<'a> Future for TweenBuilder<'a> {
                                 tween.x <= end
                             }
                         });
-                        task.submit().await;
+                        task.update().await;
                         task.wait(1).await;
 
                         if tweens.is_empty() {

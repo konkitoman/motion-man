@@ -2,11 +2,11 @@ use std::any::{Any, TypeId};
 
 use tokio::sync::mpsc::Sender;
 
-use crate::{element::ElementMessage, OSend};
+use crate::OSend;
 
 #[derive(Debug)]
 pub enum EngineMessage {
-    CreateRef(TypeId, OSend<Sender<ElementMessage>>),
+    CreateRef(TypeId, OSend<Box<dyn Any + Send + Sync + 'static>>),
     CreateElement(TypeId, Box<dyn Any + Send + Sync + 'static>),
     WaitNextFrame(OSend<()>),
     Submit,
