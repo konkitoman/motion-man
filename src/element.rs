@@ -2,7 +2,7 @@ use std::any::{Any, TypeId};
 
 use crate::scene::SceneTask;
 
-pub trait ElementBuilder: core::fmt::Debug + Send + Sync {
+pub trait ElementBuilder: Send + Sync {
     type Element<'a>;
 
     fn node_id(&self) -> TypeId;

@@ -26,7 +26,10 @@ use motion_man::{
     rect::{RectBuilder, RectNode},
 };
 
-use crate::video::{VideoBuilder, VideoNode};
+use crate::{
+    media::Media,
+    video::{VideoBuilder, VideoNode},
+};
 
 pub enum SceneMessage {
     NextFrame,
@@ -167,10 +170,6 @@ mod video {
     use motion_man::{
         create_cell,
         element::ElementBuilder,
-        ffmpeg::{
-            AVCodecContext, AVCodecType, AVFormatContext, AVFrame, AVPacket, AVPixelFormat,
-            SwsContext,
-        },
         gcx::{
             buffer::{BufferType, BufferUsage},
             shader::{Shader, ShaderBuilder},
@@ -184,17 +183,18 @@ mod video {
         RCell, SCell, SSAny,
     };
 
-    #[derive(Debug)]
+    use crate::media::Stream;
+
     pub struct VideoBuilder {
-        url: String,
+        stream: Box<dyn Stream>,
         size: [f32; 2],
         pos: [f32; 2],
     }
 
     impl VideoBuilder {
-        pub fn new(url: impl Into<String>) -> Self {
+        pub fn new(stream: Box<dyn Stream>) -> Self {
             Self {
-                url: url.into(),
+                stream,
                 size: [1., 1.],
                 pos: [0., 0.],
             }
@@ -290,93 +290,22 @@ mod video {
     struct RVideo {
         va: VertexArray,
         builder: VideoBuilder,
-        texture: Texture,
-        format_context: AVFormatContext,
-        codec_context: AVCodecContext,
-        stream_index: i32,
-        frame: AVFrame,
-        dst_frame: AVFrame,
-        packet: AVPacket,
-        sws: SwsContext,
-        finished: bool,
+        texture: Option<Texture>,
+        stream: Box<dyn Stream>,
         inner: RVideoInner,
+        gcx: GCX,
     }
 
     impl RVideo {
         pub fn new(inner: RVideoInner, va: VertexArray, gcx: &GCX, builder: VideoBuilder) -> Self {
-            let mut format_context = AVFormatContext::new(builder.url.clone()).unwrap();
-            let streams = format_context.streams();
-
-            let mut stream = None;
-            let mut index = 0;
-            for (i, tmp_stream) in streams.enumerate() {
-                if let AVCodecType::Video = tmp_stream.codec_type() {
-                    stream = Some(tmp_stream);
-                    index = i;
-                    break;
-                }
-            }
-
-            let stream = stream.unwrap();
-
-            let codec = stream.decoder().unwrap();
-
-            let mut codec_context =
-                AVCodecContext::with_params(&codec, &stream.codec_params()).unwrap();
-
-            let mut packet = AVPacket::default();
-            let mut frame = AVFrame::default();
-
-            loop {
-                format_context.read_frame(&mut packet).unwrap();
-                if packet.stream_index() == index as i32 {
-                    codec_context.send_packet(&packet);
-                    if codec_context.receive_frame(&mut frame).is_ok() {
-                        break;
-                    }
-                }
-            }
-
-            let mut dst_frame =
-                AVFrame::with_image(frame.width(), frame.height(), AVPixelFormat::RGBA).unwrap();
-            let sws = SwsContext::from_frame(&frame, &dst_frame);
-            sws.sws_scale(&frame, &mut dst_frame).unwrap();
-
-            let mut i = 0;
-            let data = dst_frame.data();
-
-            let texture = gcx.create_texture(
-                TextureType::Tex2D,
-                TextureTarget::Tex2D,
-                0,
-                InternalFormat::RGBA8,
-                frame.width(),
-                frame.height(),
-                Format::RGBA,
-                DataType::U8,
-                &dst_frame.data()[0],
-            );
-
-            Self {
+            return Self {
                 va,
+                stream: builder.stream.clone_ref(),
                 builder,
-                texture,
-                format_context,
-                codec_context,
-                stream_index: index as i32,
-                frame,
-                dst_frame,
-                packet,
-                sws,
-                finished: false,
+                texture: None,
                 inner,
-            }
-        }
-    }
-
-    impl core::fmt::Debug for RVideo {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            Ok(())
+                gcx: gcx.clone(),
+            };
         }
     }
 
@@ -388,21 +317,12 @@ mod video {
         drop: NSignal<()>,
     }
 
+    #[derive(Default)]
     pub struct VideoNode {
         videos: Vec<RVideo>,
         shader: Option<Shader>,
 
         pending: Option<RVideoInner>,
-    }
-
-    impl Default for VideoNode {
-        fn default() -> Self {
-            Self {
-                videos: Vec::new(),
-                shader: None,
-                pending: None,
-            }
-        }
     }
 
     impl Node for VideoNode {
@@ -475,33 +395,25 @@ mod video {
 
         fn update(&mut self) {
             self.videos.retain_mut(|video| {
-                if let Some(_) = video.inner.step.get() {
-                    'video: {
-                        if video.finished {
-                            break 'video;
+                if video.inner.step.get().is_some() {
+                    if let Some(data) = video.stream.data(0) {
+                        if let Some(texture) = &mut video.texture {
+                            texture.update(0, data)
+                        } else {
+                            let width = video.stream.width().unwrap();
+                            let height = video.stream.height().unwrap();
+                            video.texture = Some(video.gcx.create_texture(
+                                TextureType::Tex2D,
+                                TextureTarget::Tex2D,
+                                0,
+                                InternalFormat::RGBA8,
+                                width as i32,
+                                height as i32,
+                                Format::RGBA,
+                                DataType::U8,
+                                data,
+                            ));
                         }
-
-                        loop {
-                            if video.format_context.read_frame(&mut video.packet).is_ok() {
-                                if video.packet.stream_index() == video.stream_index {
-                                    video.codec_context.send_packet(&video.packet);
-                                    if video.codec_context.receive_frame(&mut video.frame).is_ok() {
-                                        break;
-                                    }
-                                }
-                            } else {
-                                video.inner.finished.set(true);
-                                video.finished = true;
-                                break 'video;
-                            }
-                        }
-
-                        video
-                            .sws
-                            .sws_scale(&video.frame, &mut video.dst_frame)
-                            .unwrap();
-
-                        video.texture.update(0, video.dst_frame.data()[0]);
                     }
                 }
 
@@ -517,7 +429,7 @@ mod video {
                     rebuild = true;
                 }
 
-                if let Some(_) = video.inner.drop.get() {
+                if video.inner.drop.get().is_some() {
                     return false;
                 }
 
@@ -537,7 +449,10 @@ mod video {
             gcx.use_shader(shader, |gcx| {
                 for video in self.videos.iter() {
                     gcx.use_vertex_array(&video.va, |gcx| {
-                        video.texture.activate(0);
+                        let Some(texture) = &video.texture else {
+                            return;
+                        };
+                        texture.activate(0);
                         shader.set_uniform("IMAGE", 0).unwrap();
                         gcx.draw_arrays(motion_man::gcx::PrimitiveType::TrianglesFan, 0, 4);
                     });
@@ -576,7 +491,423 @@ mod video {
     }
 }
 
+mod media {
+    use std::{any::Any, mem::MaybeUninit, path::Path, sync::Arc};
+
+    use tokio::sync::RwLock;
+
+    use ffmpeg::{
+        codec::Parameters,
+        format::context::Input as FInput,
+        format::{input as finput, Pixel},
+        frame::Audio as AFrame,
+        frame::Video as VFrame,
+        util::error::Error as AVError,
+        ChannelLayout, Packet,
+    };
+    use ffmpeg_next as ffmpeg;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum StreamType {
+        Video,
+        Audio,
+    }
+
+    pub trait Stream: Send + Sync {
+        fn ty(&self) -> StreamType;
+        fn index(&self) -> usize;
+        fn clone_ref(&self) -> Box<dyn Stream>;
+
+        fn send_packet(&self, decoder: &mut Box<dyn Any>, packet: Packet);
+
+        fn next(&self) -> bool;
+        fn prev(&self) -> bool;
+        fn clear(&self);
+
+        fn data(&self, index: usize) -> Option<&[u8]>;
+
+        fn width(&self) -> Option<u32>;
+        fn height(&self) -> Option<u32>;
+
+        fn gc(&self);
+    }
+
+    pub struct VideoStream {
+        frames: Vec<VFrame>,
+        current: usize,
+
+        index: usize,
+    }
+
+    impl VideoStream {
+        pub fn new(index: usize) -> Arc<RwLock<Self>> {
+            Arc::new(RwLock::new(Self {
+                frames: Vec::default(),
+                current: usize::MAX,
+                index,
+            }))
+        }
+    }
+
+    impl Stream for Arc<RwLock<VideoStream>> {
+        fn ty(&self) -> StreamType {
+            StreamType::Video
+        }
+
+        fn index(&self) -> usize {
+            self.blocking_read().index
+        }
+
+        fn clone_ref(&self) -> Box<dyn Stream> {
+            Box::new(self.clone())
+        }
+
+        fn send_packet(&self, decoder: &mut Box<dyn Any>, packet: Packet) {
+            let decoder = decoder.downcast_mut::<VideoDecoder>().unwrap();
+            decoder.decoder.send_packet(&packet).unwrap();
+            let mut frame = VFrame::empty();
+            if decoder.decoder.receive_frame(&mut frame).is_err() {
+                return;
+            }
+
+            let mut dst = VFrame::new(Pixel::RGBA, frame.width(), frame.height());
+            let mut sws = frame.converter(Pixel::RGBA).unwrap();
+            sws.run(&frame, &mut dst).unwrap();
+
+            let s = &mut *self.try_write().unwrap();
+
+            s.frames.push(dst);
+        }
+
+        fn next(&self) -> bool {
+            self.gc();
+            let s = &mut *self.try_write().unwrap();
+
+            if !s.frames.is_empty() && s.current == usize::MAX {
+                s.current = 0;
+                return true;
+            }
+
+            println!("Current: {}, Frames: {}", s.current, s.frames.len());
+            if s.current < s.frames.len() {
+                s.current += 1;
+                true
+            } else {
+                false
+            }
+        }
+
+        fn prev(&self) -> bool {
+            let s = &mut *self.try_write().unwrap();
+
+            if s.current > 0 {
+                s.current -= 1;
+                true
+            } else {
+                false
+            }
+        }
+
+        fn gc(&self) {
+            let s = &mut *self.try_write().unwrap();
+
+            if s.current > 100 && s.current != usize::MAX {
+                s.frames.drain(..50);
+                s.current -= 50;
+            }
+        }
+
+        fn clear(&self) {
+            let s = &mut *self.try_write().unwrap();
+            s.current = usize::MAX;
+            s.frames.clear();
+        }
+
+        fn data(&self, index: usize) -> Option<&[u8]> {
+            let s = &*self.try_read().unwrap();
+
+            if s.current == usize::MAX {
+                return None;
+            }
+
+            let f = &s.frames[s.current];
+            let data = unsafe {
+                core::slice::from_raw_parts(
+                    (*f.as_ptr()).data[index],
+                    f.stride(index) * f.plane_height(index) as usize,
+                )
+            };
+            Some(data)
+        }
+
+        fn width(&self) -> Option<u32> {
+            let s = &*self.try_read().unwrap();
+            if s.current == usize::MAX {
+                return None;
+            }
+            Some(s.frames[s.current].width())
+        }
+
+        fn height(&self) -> Option<u32> {
+            let s = &*self.try_read().unwrap();
+            if s.current == usize::MAX {
+                return None;
+            }
+            Some(s.frames[s.current].height())
+        }
+    }
+
+    pub struct AudioStream {
+        frames: Vec<AFrame>,
+        current: usize,
+
+        index: usize,
+    }
+
+    impl AudioStream {
+        pub fn new(index: usize) -> Arc<RwLock<Self>> {
+            Arc::new(RwLock::new(Self {
+                frames: Vec::default(),
+                current: usize::MAX,
+                index,
+            }))
+        }
+    }
+
+    impl Stream for Arc<RwLock<AudioStream>> {
+        fn ty(&self) -> StreamType {
+            StreamType::Audio
+        }
+
+        fn index(&self) -> usize {
+            self.try_read().unwrap().index
+        }
+
+        fn send_packet(&self, decoder: &mut Box<dyn Any>, packet: Packet) {
+            let decoder = decoder.downcast_mut::<AudioDecoder>().unwrap();
+            decoder.decoder.send_packet(&packet).unwrap();
+            let mut frame = AFrame::empty();
+            if decoder.decoder.receive_frame(&mut frame).is_err() {
+                return;
+            }
+
+            let mut dst = AFrame::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                frame.samples(),
+                ChannelLayout::STEREO,
+            );
+            let mut sws = frame
+                .resampler(
+                    ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                    ChannelLayout::STEREO,
+                    48000,
+                )
+                .unwrap();
+            let delay = sws.run(&frame, &mut dst).unwrap();
+
+            self.try_write().unwrap().frames.push(dst);
+        }
+
+        fn clone_ref(&self) -> Box<dyn Stream> {
+            Box::new(self.clone())
+        }
+
+        fn next(&self) -> bool {
+            self.gc();
+            let s = &mut *self.try_write().unwrap();
+
+            if !s.frames.is_empty() && s.current == usize::MAX {
+                s.current = 0;
+                return true;
+            }
+
+            if s.current < s.frames.len() {
+                s.current += 1;
+                true
+            } else {
+                false
+            }
+        }
+
+        fn prev(&self) -> bool {
+            let s = &mut *self.try_write().unwrap();
+
+            if s.current > 0 {
+                s.current -= 1;
+                true
+            } else {
+                false
+            }
+        }
+
+        fn gc(&self) {
+            let s = &mut *self.try_write().unwrap();
+
+            if s.current > 100 && s.current != usize::MAX {
+                s.frames.drain(..50);
+                s.current -= 50;
+            }
+        }
+
+        fn clear(&self) {
+            let s = &mut *self.try_write().unwrap();
+            s.current = usize::MAX;
+            s.frames.clear();
+        }
+
+        fn data(&self, index: usize) -> Option<&[u8]> {
+            let s = &*self.blocking_read();
+
+            if s.current == usize::MAX {
+                return None;
+            }
+
+            let f = &s.frames[s.current];
+            let data = unsafe {
+                core::slice::from_raw_parts(
+                    (*f.as_ptr()).data[index],
+                    (*f.as_ptr()).linesize[index] as usize,
+                )
+            };
+            Some(data)
+        }
+
+        fn width(&self) -> Option<u32> {
+            None
+        }
+
+        fn height(&self) -> Option<u32> {
+            None
+        }
+    }
+
+    pub struct VideoDecoder {
+        decoder: ffmpeg::codec::decoder::Video,
+    }
+
+    impl VideoDecoder {
+        pub fn new<D: ffmpeg::codec::traits::Decoder>(params: Parameters, codec: D) -> Self {
+            let mut ctx = ffmpeg::codec::Context::new();
+            ctx.set_parameters(params).unwrap();
+            let decoder = ctx.decoder().open_as(codec).unwrap().video().unwrap();
+            Self { decoder }
+        }
+    }
+
+    struct AudioDecoder {
+        decoder: ffmpeg::codec::decoder::Audio,
+    }
+
+    impl AudioDecoder {
+        pub fn new<D: ffmpeg::codec::traits::Decoder>(params: Parameters, codec: D) -> Self {
+            let mut ctx = ffmpeg::codec::Context::new();
+            ctx.set_parameters(params).unwrap();
+            let decoder = ctx.decoder().open_as(codec).unwrap().audio().unwrap();
+            Self { decoder }
+        }
+    }
+
+    pub struct Media {
+        format: FInput,
+
+        streams: Vec<Box<dyn Stream>>,
+        decoders: Vec<Box<dyn Any>>,
+    }
+
+    unsafe impl Send for Media {}
+    unsafe impl Sync for Media {}
+
+    impl Media {
+        pub fn new<P: AsRef<Path>>(url: P) -> Result<Self, AVError> {
+            let format = finput(&url)?;
+
+            let mut streams = Vec::<Box<dyn Stream>>::default();
+            let mut decoders = Vec::<Box<dyn Any>>::default();
+
+            for (i, stream) in format.streams().enumerate() {
+                match stream.parameters().medium() {
+                    ffmpeg::media::Type::Unknown => todo!(),
+                    ffmpeg::media::Type::Video => {
+                        let s = VideoStream::new(i);
+                        let decoder =
+                            VideoDecoder::new(stream.parameters(), stream.parameters().id());
+                        decoders.push(Box::new(decoder));
+                        streams.push(Box::new(s));
+                    }
+                    ffmpeg::media::Type::Audio => {
+                        let s = AudioStream::new(i);
+                        let decoder =
+                            AudioDecoder::new(stream.parameters(), stream.parameters().id());
+                        decoders.push(Box::new(decoder));
+                        streams.push(Box::new(s));
+                    }
+                    ffmpeg::media::Type::Data => todo!(),
+                    ffmpeg::media::Type::Subtitle => todo!(),
+                    ffmpeg::media::Type::Attachment => todo!(),
+                }
+            }
+
+            Ok(Self {
+                format,
+                streams,
+                decoders,
+            })
+        }
+
+        pub fn video(&self, index: usize) -> Option<Box<dyn Stream>> {
+            let mut i = 0;
+            for stream in self.streams.iter() {
+                if stream.ty() != StreamType::Video {
+                    continue;
+                }
+
+                if i == index {
+                    return Some(stream.clone_ref());
+                }
+
+                i += 1;
+            }
+
+            None
+        }
+
+        pub fn next(&mut self) -> bool {
+            let mut readys = vec![false; self.streams.len()];
+            loop {
+                let Some((stream, packet)) = self.format.packets().next() else {
+                    return false;
+                };
+
+                let i = stream.index();
+
+                let decoder = &mut self.decoders[i];
+                self.streams[i].send_packet(decoder, packet);
+                if !readys[i] {
+                    readys[i] = self.streams[i].next()
+                }
+
+                if readys
+                    .iter()
+                    .fold(true, |val, ready| if !*ready { false } else { val })
+                {
+                    break;
+                }
+            }
+            true
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
+    ffmpeg_next::init().unwrap();
+    let version = ffmpeg_next::util::version();
+    println!("FFMPEG: {version}");
+
+    {
+        ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Trace);
+        ffmpeg_next::log::set_flags(ffmpeg_next::log::Flags::SKIP_REPEATED);
+    }
+
     let rt = tokio::runtime::Builder::new_current_thread().build()?;
     let _enter = rt.enter();
 
@@ -622,11 +953,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             rect2.position.tween([-0.5, 0.5], [-0.5, -0.5], 1.0).await;
             rect2.position.tween([-0.5, -0.5], [0., 0.], 1.0).await;
 
-            let mut video = scene.spawn_element(VideoBuilder::new("video.mkv")).await;
+            let mut media = Media::new("video.mkv").unwrap();
+            let mut video = scene
+                .spawn_element(VideoBuilder::new(media.video(0).unwrap()))
+                .await;
 
             video.size.tween([0., 0.], [1., 1.], 1.0).await;
 
-            while !video.finished.get() {
+            while media.next() {
                 video.step.set(()).await;
                 scene.wait(1).await;
             }
