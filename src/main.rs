@@ -1,9 +1,14 @@
 use std::{
     error::Error,
     rc::Rc,
+    sync::mpsc::channel,
     time::{Duration, Instant},
 };
 
+use cpal::{
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+    SampleRate,
+};
 use glutin::{
     config::{Config, ConfigTemplateBuilder, GlConfig},
     context::{ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentContext},
@@ -27,6 +32,7 @@ use motion_man::{
 };
 
 use crate::{
+    audio::{AudioBuilder, AudioNode},
     media::Media,
     video::{VideoBuilder, VideoNode},
 };
@@ -525,9 +531,21 @@ mod media {
         fn clear(&self);
 
         fn data(&self, index: usize) -> Option<&[u8]>;
+        fn samples(&self) -> Option<usize> {
+            None
+        }
+        fn channels(&self) -> Option<usize> {
+            None
+        }
 
-        fn width(&self) -> Option<u32>;
-        fn height(&self) -> Option<u32>;
+        fn current(&self) -> usize;
+
+        fn width(&self) -> Option<u32> {
+            None
+        }
+        fn height(&self) -> Option<u32> {
+            None
+        }
 
         fn gc(&self);
     }
@@ -655,6 +673,10 @@ mod media {
             }
             Some(s.frames[s.current].height())
         }
+
+        fn current(&self) -> usize {
+            self.try_read().unwrap().current
+        }
     }
 
     pub struct AudioStream {
@@ -772,12 +794,30 @@ mod media {
             Some(data)
         }
 
-        fn width(&self) -> Option<u32> {
-            None
+        fn samples(&self) -> Option<usize> {
+            let s = &*self.blocking_read();
+
+            if s.current == usize::MAX {
+                return None;
+            }
+
+            let f = &s.frames[s.current];
+            Some(f.samples())
         }
 
-        fn height(&self) -> Option<u32> {
-            None
+        fn channels(&self) -> Option<usize> {
+            let s = &*self.blocking_read();
+
+            if s.current == usize::MAX {
+                return None;
+            }
+
+            let f = &s.frames[s.current];
+            Some(f.channels() as usize)
+        }
+
+        fn current(&self) -> usize {
+            self.try_read().unwrap().current
         }
     }
 
@@ -871,6 +911,23 @@ mod media {
             None
         }
 
+        pub fn audio(&self, index: usize) -> Option<Box<dyn Stream>> {
+            let mut i = 0;
+            for stream in self.streams.iter() {
+                if stream.ty() != StreamType::Audio {
+                    continue;
+                }
+
+                if i == index {
+                    return Some(stream.clone_ref());
+                }
+
+                i += 1;
+            }
+
+            None
+        }
+
         pub fn next(&mut self) -> bool {
             let mut readys = vec![false; self.streams.len()];
             loop {
@@ -898,23 +955,215 @@ mod media {
     }
 }
 
+mod audio {
+    use motion_man::{
+        element::ElementBuilder,
+        node::Node,
+        signal::{create_signal, NSignal, Signal, SignalInner},
+    };
+
+    use crate::media::Stream;
+
+    pub struct AudioBuilder {
+        stream: Box<dyn Stream>,
+    }
+
+    impl AudioBuilder {
+        pub fn new(stream: Box<dyn Stream>) -> Self {
+            Self { stream }
+        }
+    }
+
+    impl ElementBuilder for AudioBuilder {
+        type Element<'a> = Audio<'a>;
+
+        fn node_id(&self) -> std::any::TypeId {
+            core::any::TypeId::of::<AudioNode>()
+        }
+
+        fn create_element_ref<'a>(
+            &self,
+            inner: Box<dyn std::any::Any + Send + Sync + 'static>,
+            scene: &'a motion_man::scene::SceneTask,
+        ) -> Self::Element<'a> {
+            let drop = *inner.downcast::<SignalInner<()>>().unwrap();
+
+            Audio {
+                drop: Signal::new(drop, scene, ()),
+                droped: false,
+            }
+        }
+    }
+
+    pub struct Audio<'a> {
+        drop: Signal<'a, ()>,
+        droped: bool,
+    }
+
+    impl<'a> Audio<'a> {
+        pub async fn drop(mut self) {
+            self.drop.set(()).await;
+            self.droped = true;
+        }
+    }
+
+    impl<'a> Drop for Audio<'a> {
+        fn drop(&mut self) {
+            if !self.droped {
+                eprintln!("You need to call drop on Audio when is no more needed!");
+                std::process::abort();
+            }
+        }
+    }
+
+    #[derive(Default)]
+    pub struct AudioNode {
+        audios: Vec<(NSignal<()>, Box<dyn Stream>, Vec<f32>, usize)>,
+        pending: Option<NSignal<()>>,
+    }
+
+    impl Node for AudioNode {
+        type ElementBuilder = AudioBuilder;
+
+        fn init_element(&mut self, gcx: &motion_man::gcx::GCX, builder: Self::ElementBuilder) {
+            let drop = self.pending.take().unwrap();
+            self.audios
+                .push((drop, builder.stream, Vec::new(), usize::MAX));
+        }
+
+        fn create_element(&mut self) -> Box<dyn std::any::Any + Send + Sync + 'static> {
+            let (drop, ndrop) = create_signal::<()>();
+
+            self.pending = Some(ndrop);
+
+            Box::new(drop)
+        }
+
+        fn update(&mut self) {
+            self.audios.retain_mut(|audio| {
+                if audio.0.get().is_some() {
+                    return false;
+                }
+                true
+            })
+        }
+
+        fn audio_process(&mut self, buffer: &mut [f32]) {
+            for audio in self.audios.iter_mut() {
+                if audio.1.current() != audio.3 {
+                    if let Some(data) = audio.1.data(0) {
+                        let samples = audio.1.samples().unwrap() * audio.1.channels().unwrap();
+                        let buf: &[f32] = bytemuck::cast_slice(data);
+                        audio.2.extend(&buf[..samples]);
+                    }
+                    audio.3 = audio.1.current();
+                }
+
+                let mut tmp = audio
+                    .2
+                    .drain(..buffer.len().min(audio.2.len()))
+                    .collect::<Vec<f32>>();
+                tmp.resize(buffer.len(), 0.);
+                for i in 0..tmp.len() {
+                    buffer[i] += tmp[i];
+                }
+            }
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     ffmpeg_next::init().unwrap();
     let version = ffmpeg_next::util::version();
     println!("FFMPEG: {version}");
 
     {
-        ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Trace);
-        ffmpeg_next::log::set_flags(ffmpeg_next::log::Flags::SKIP_REPEATED);
+        // ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Trace);
+        // ffmpeg_next::log::set_flags(ffmpeg_next::log::Flags::SKIP_REPEATED);
     }
+
+    println!("Hosts: {:?}", cpal::ALL_HOSTS);
+
+    let host = cpal::host_from_id(cpal::ALL_HOSTS[0]).unwrap();
+    let output = host.default_output_device().unwrap();
+
+    let name = output.name().unwrap();
+    println!("Output Device Name: {name}");
+
+    let configs = output.supported_output_configs().unwrap();
+    for config in configs {
+        println!("Config: {config:?}");
+    }
+
+    let config = output.default_output_config().unwrap();
+    println!("Default Output Config: {config:?}");
+
+    let config = cpal::SupportedStreamConfig::new(
+        2,
+        cpal::SampleRate(48000),
+        config.buffer_size().clone(),
+        cpal::SampleFormat::F32,
+    );
+
+    println!("Using config: {config:?}");
+
+    let (sender, receiver) = channel::<Vec<f32>>();
+    let mut buffer = Vec::<f32>::new();
+
+    let stream = output
+        .build_output_stream(
+            &config.config(),
+            move |out: &mut [f32], _callback_info| {
+                while let Ok(buf) = receiver.try_recv() {
+                    buffer.extend(buf);
+                }
+
+                let mut tmp = buffer
+                    .drain(..out.len().min(buffer.len()))
+                    .collect::<Vec<f32>>();
+                tmp.resize(out.len(), 0.);
+
+                for (i, s) in tmp.into_iter().enumerate() {
+                    out[i] = s;
+                }
+            },
+            |err| {
+                println!("Audio Error: {err:?}");
+            },
+            None,
+        )
+        .unwrap();
+
+    stream.play().unwrap();
+
+    let mut v = vec![0.; 48000 / 2];
+    for i in 0..v.len() {
+        v[i] = f32::sin(i as f32 * 0.1);
+    }
+    sender.send(v).unwrap();
+
+    let mut v = vec![0.; 48000 / 2];
+    for i in 0..v.len() {
+        v[i] = f32::sin(i as f32 * 0.09);
+    }
+    sender.send(v).unwrap();
+
+    let mut v = vec![0.; 48000 / 2];
+    for i in 0..v.len() {
+        v[i] = f32::sin(i as f32 * 0.08);
+    }
+    sender.send(v).unwrap();
+
+    std::thread::sleep(Duration::from_secs_f32(2.0));
 
     let rt = tokio::runtime::Builder::new_current_thread().build()?;
     let _enter = rt.enter();
 
-    let mut engine = Engine::new(60., 1920.try_into()?, 1080.try_into()?);
+    let mut engine = Engine::new(60., 1920.try_into()?, 1080.try_into()?, 48000, 2);
 
     engine.register_node::<RectNode>();
     engine.register_node::<VideoNode>();
+    engine.register_node::<AudioNode>();
 
     engine.create_scene(|scene| {
         Box::pin(async move {
@@ -957,6 +1206,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut video = scene
                 .spawn_element(VideoBuilder::new(media.video(0).unwrap()))
                 .await;
+            let audio = scene
+                .spawn_element(AudioBuilder::new(media.audio(0).unwrap()))
+                .await;
 
             video.size.tween([0., 0.], [1., 1.], 1.0).await;
 
@@ -967,6 +1219,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             video.size.tween([1., 1.], [0.1, 0.1], 1.0).await;
 
+            audio.drop().await;
             video.drop().await;
 
             rect2.size.tween([0.5, 0.5], [0., 0.], 1.0).await;
@@ -995,7 +1248,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         gcx.clear(BufferBit::COLOR);
 
         rt.block_on(engine.run(&gcx));
+
         engine.render(&gcx);
+        let buffer = engine.audio_buffer();
+        sender.send(buffer.to_vec()).unwrap();
         surface.swap_buffers(&context).unwrap();
 
         if let Some(remaining) = Duration::from_secs_f64(engine.info.blocking_read().delta)

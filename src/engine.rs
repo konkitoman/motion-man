@@ -35,17 +35,28 @@ pub struct Engine {
     pub info: Arc<RwLock<Info>>,
 
     nodes: Vec<Box<dyn AbstractNode>>,
+
+    audio_buffer: Vec<f32>,
 }
 
 impl Engine {
-    pub fn new(fps: f64, width: NonZeroU32, height: NonZeroU32) -> Self {
+    pub fn new(
+        fps: f64,
+        width: NonZeroU32,
+        height: NonZeroU32,
+        samples: usize,
+        channels: usize,
+    ) -> Self {
+        let delta = 1. / fps;
         let info = Info {
-            delta: 1. / fps,
+            delta,
             width,
             height,
         };
 
         let (engine_sender, receiver) = channel(8);
+
+        let audio_buffer = vec![0.; ((samples * channels) as f64 / fps).round() as usize];
 
         Self {
             scenes: Vec::default(),
@@ -55,7 +66,12 @@ impl Engine {
             engine_sender,
             receiver,
             waiting: Vec::default(),
+            audio_buffer,
         }
+    }
+
+    pub fn audio_buffer(&self) -> &[f32] {
+        &self.audio_buffer
     }
 
     pub fn create_scene(
@@ -87,9 +103,13 @@ impl Engine {
         self.nodes.push(Box::new(node));
     }
 
-    pub fn render(&self, gcx: &GCX) {
-        for node in self.nodes.iter() {
+    pub fn render(&mut self, gcx: &GCX) {
+        for sample in self.audio_buffer.iter_mut() {
+            *sample = 0.;
+        }
+        for node in self.nodes.iter_mut() {
             node.render(gcx);
+            node.audio_process(&mut self.audio_buffer);
         }
     }
 

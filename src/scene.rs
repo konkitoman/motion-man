@@ -37,10 +37,7 @@ impl SceneTask {
         self.info.try_read().unwrap().delta
     }
 
-    pub async fn spawn_element<'a, T: ElementBuilder + 'static>(
-        &'a self,
-        builder: T,
-    ) -> T::Element<'a> {
+    pub async fn spawn_element<T: ElementBuilder + 'static>(&self, builder: T) -> T::Element<'_> {
         let (send, recv) = ochannel();
         self.sender
             .send(EngineMessage::CreateRef(builder.node_id(), send))

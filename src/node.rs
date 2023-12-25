@@ -7,13 +7,14 @@ use crate::gcx::GCX;
 pub trait Node {
     type ElementBuilder;
 
-    fn init(&mut self, gcx: &GCX);
+    fn init(&mut self, _gcx: &GCX) {}
 
     fn init_element(&mut self, gcx: &GCX, builder: Self::ElementBuilder);
     fn create_element(&mut self) -> Box<dyn Any + Send + Sync + 'static>;
 
     fn update(&mut self);
-    fn render(&self, gcx: &GCX);
+    fn render(&self, _gcx: &GCX) {}
+    fn audio_process(&mut self, _buffer: &mut [f32]) {}
 }
 
 pub trait AbstractNode {
@@ -24,6 +25,7 @@ pub trait AbstractNode {
 
     fn update(&mut self);
     fn render(&self, gcx: &GCX);
+    fn audio_process(&mut self, buffer: &mut [f32]);
 
     fn ty_id(&self) -> TypeId;
 }
@@ -52,5 +54,9 @@ impl<T: Node + 'static> AbstractNode for T {
 
     fn ty_id(&self) -> TypeId {
         TypeId::of::<T>()
+    }
+
+    fn audio_process(&mut self, buffer: &mut [f32]) {
+        self.audio_process(buffer);
     }
 }
