@@ -13,7 +13,7 @@ pub trait Node {
     fn create_element(&mut self) -> Box<dyn Any + Send + Sync + 'static>;
 
     fn update(&mut self);
-    fn render(&self, _gcx: &GCX) {}
+    fn render(&mut self, _gcx: &GCX) {}
     fn audio_process(&mut self, _buffer: &mut [f32]) {}
 }
 
@@ -24,7 +24,7 @@ pub trait AbstractNode {
     fn create_element(&mut self) -> Box<dyn Any + Send + Sync + 'static>;
 
     fn update(&mut self);
-    fn render(&self, gcx: &GCX);
+    fn render(&mut self, gcx: &GCX);
     fn audio_process(&mut self, buffer: &mut [f32]);
 
     fn ty_id(&self) -> TypeId;
@@ -48,7 +48,7 @@ impl<T: Node + 'static> AbstractNode for T {
         self.update();
     }
 
-    fn render(&self, gcx: &GCX) {
+    fn render(&mut self, gcx: &GCX) {
         self.render(gcx);
     }
 

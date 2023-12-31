@@ -58,6 +58,8 @@ impl Engine {
 
         let audio_buffer = vec![0.; ((samples * channels) as f64 / fps).round() as usize];
 
+        println!("Engine Audio Buffer Size: {}", audio_buffer.len());
+
         Self {
             scenes: Vec::default(),
             info: Arc::new(RwLock::new(info)),

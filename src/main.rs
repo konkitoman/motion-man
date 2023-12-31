@@ -219,12 +219,10 @@ mod video {
             inner: Box<SSAny>,
             scene: &'a SceneTask,
         ) -> Self::Element<'a> {
-            let (position, size, step, drop, finished): (
+            let (position, size, drop): (
                 SignalInner<[f32; 2]>,
                 SignalInner<[f32; 2]>,
                 SignalInner<()>,
-                SignalInner<()>,
-                RCell<bool>,
             ) = *inner.downcast().unwrap();
 
             Video {
@@ -232,9 +230,7 @@ mod video {
                 droped: false,
                 position: Signal::new(position, scene, self.pos),
                 size: Signal::new(size, scene, self.size),
-                step: Signal::new(step, scene, ()),
                 drop: Signal::new(drop, scene, ()),
-                finished,
             }
         }
     }
@@ -242,8 +238,6 @@ mod video {
     pub struct Video<'a> {
         pub position: Signal<'a, [f32; 2]>,
         pub size: Signal<'a, [f32; 2]>,
-        pub step: Signal<'a, ()>,
-        pub finished: RCell<bool>,
 
         scene: &'a SceneTask,
 
@@ -299,7 +293,6 @@ mod video {
         texture: Option<Texture>,
         stream: Box<dyn Stream>,
         inner: RVideoInner,
-        gcx: GCX,
     }
 
     impl RVideo {
@@ -310,16 +303,13 @@ mod video {
                 builder,
                 texture: None,
                 inner,
-                gcx: gcx.clone(),
             };
         }
     }
 
     pub struct RVideoInner {
-        finished: SCell<bool>,
         position: NSignal<[f32; 2]>,
         size: NSignal<[f32; 2]>,
-        step: NSignal<()>,
         drop: NSignal<()>,
     }
 
@@ -385,44 +375,18 @@ mod video {
         fn create_element(&mut self) -> Box<SSAny> {
             let (sposition, position) = create_signal();
             let (ssize, size) = create_signal();
-            let (sstep, step) = create_signal();
             let (sdrop, drop) = create_signal();
-            let (finished, rfinished) = create_cell(false);
 
             self.pending = Some(RVideoInner {
-                finished,
                 position,
                 size,
-                step,
                 drop,
             });
-            Box::new((sposition, ssize, sstep, sdrop, rfinished))
+            Box::new((sposition, ssize, sdrop))
         }
 
         fn update(&mut self) {
             self.videos.retain_mut(|video| {
-                if video.inner.step.get().is_some() {
-                    if let Some(data) = video.stream.data(0) {
-                        if let Some(texture) = &mut video.texture {
-                            texture.update(0, data)
-                        } else {
-                            let width = video.stream.width().unwrap();
-                            let height = video.stream.height().unwrap();
-                            video.texture = Some(video.gcx.create_texture(
-                                TextureType::Tex2D,
-                                TextureTarget::Tex2D,
-                                0,
-                                InternalFormat::RGBA8,
-                                width as i32,
-                                height as i32,
-                                Format::RGBA,
-                                DataType::U8,
-                                data,
-                            ));
-                        }
-                    }
-                }
-
                 let mut rebuild = false;
 
                 if let Some(position) = video.inner.position.get() {
@@ -450,11 +414,31 @@ mod video {
             });
         }
 
-        fn render(&self, gcx: &motion_man::gcx::GCX) {
+        fn render(&mut self, gcx: &motion_man::gcx::GCX) {
             let shader = self.shader.as_ref().unwrap();
             gcx.use_shader(shader, |gcx| {
-                for video in self.videos.iter() {
+                for video in self.videos.iter_mut() {
                     gcx.use_vertex_array(&video.va, |gcx| {
+                        if let Some(data) = video.stream.data(0) {
+                            if let Some(texture) = &mut video.texture {
+                                texture.update(0, data)
+                            } else {
+                                let width = video.stream.width().unwrap();
+                                let height = video.stream.height().unwrap();
+                                video.texture = Some(gcx.create_texture(
+                                    TextureType::Tex2D,
+                                    TextureTarget::Tex2D,
+                                    0,
+                                    InternalFormat::RGBA8,
+                                    width as i32,
+                                    height as i32,
+                                    Format::RGBA,
+                                    DataType::U8,
+                                    data,
+                                ));
+                            }
+                        }
+
                         let Some(texture) = &video.texture else {
                             return;
                         };
@@ -1143,14 +1127,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     sender.send(v).unwrap();
 
     let mut v = vec![0.; 48000 / 2];
-    for i in 0..v.len() {
-        v[i] = f32::sin(i as f32 * 0.09);
+    for (i, v) in v.iter_mut().enumerate() {
+        *v = f32::sin(i as f32 * 0.09);
     }
     sender.send(v).unwrap();
 
     let mut v = vec![0.; 48000 / 2];
-    for i in 0..v.len() {
-        v[i] = f32::sin(i as f32 * 0.08);
+    for (i, v) in v.iter_mut().enumerate() {
+        *v = f32::sin(i as f32 * 0.08);
     }
     sender.send(v).unwrap();
 
@@ -1213,7 +1197,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             video.size.tween([0., 0.], [1., 1.], 1.0).await;
 
             while media.next() {
-                video.step.set(()).await;
                 scene.wait(1).await;
             }
 

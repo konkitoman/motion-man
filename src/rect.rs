@@ -188,7 +188,7 @@ impl Node for RectNode {
         });
     }
 
-    fn render(&self, gcx: &GCX) {
+    fn render(&mut self, gcx: &GCX) {
         let Some(shader) = &self.shader else { panic!() };
         gcx.use_shader(shader, |gcx| {
             for rect in self.rects.iter() {
