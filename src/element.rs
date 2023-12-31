@@ -2,8 +2,8 @@ use std::any::{Any, TypeId};
 
 use crate::scene::SceneTask;
 
-pub trait ElementBuilder: Send + Sync {
-    type Element<'a>;
+pub trait NodeBuilder: Send + Sync {
+    type Node<'a>;
 
     fn node_id(&self) -> TypeId;
 
@@ -11,7 +11,7 @@ pub trait ElementBuilder: Send + Sync {
         &self,
         inner: Box<dyn Any + Send + Sync + 'static>,
         scene: &'a SceneTask,
-    ) -> Self::Element<'a>;
+    ) -> Self::Node<'a>;
 }
 
 pub trait AbstractElementBuilder: core::fmt::Debug + Send + Sync {

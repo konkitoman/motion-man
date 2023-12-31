@@ -8,8 +8,8 @@ use crate::OSend;
 pub enum EngineMessage {
     CreateRef(TypeId, OSend<Box<dyn Any + Send + Sync + 'static>>),
     CreateElement(TypeId, Box<dyn Any + Send + Sync + 'static>),
-    WaitNextFrame(OSend<()>),
-    Submit,
+    Present(OSend<()>),
+    Update,
 }
 
 pub struct EngineSender {

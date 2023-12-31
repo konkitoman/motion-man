@@ -175,7 +175,7 @@ mod video {
 
     use motion_man::{
         create_cell,
-        element::ElementBuilder,
+        element::NodeBuilder,
         gcx::{
             buffer::{BufferType, BufferUsage},
             shader::{Shader, ShaderBuilder},
@@ -183,7 +183,7 @@ mod video {
             vertex_array::{Field, Fields, VertexArray},
             DataType, GCX,
         },
-        node::Node,
+        node::NodeManager,
         scene::SceneTask,
         signal::{create_signal, NSignal, Signal, SignalInner},
         RCell, SCell, SSAny,
@@ -207,8 +207,8 @@ mod video {
         }
     }
 
-    impl ElementBuilder for VideoBuilder {
-        type Element<'a> = Video<'a>;
+    impl NodeBuilder for VideoBuilder {
+        type Node<'a> = Video<'a>;
 
         fn node_id(&self) -> std::any::TypeId {
             TypeId::of::<VideoNode>()
@@ -218,7 +218,7 @@ mod video {
             &self,
             inner: Box<SSAny>,
             scene: &'a SceneTask,
-        ) -> Self::Element<'a> {
+        ) -> Self::Node<'a> {
             let (position, size, drop): (
                 SignalInner<[f32; 2]>,
                 SignalInner<[f32; 2]>,
@@ -321,7 +321,7 @@ mod video {
         pending: Option<RVideoInner>,
     }
 
-    impl Node for VideoNode {
+    impl NodeManager for VideoNode {
         type ElementBuilder = VideoBuilder;
 
         fn init(&mut self, gcx: &motion_man::gcx::GCX) {
@@ -360,7 +360,7 @@ mod video {
             );
         }
 
-        fn init_element(&mut self, gcx: &motion_man::gcx::GCX, builder: Self::ElementBuilder) {
+        fn init_node(&mut self, gcx: &motion_man::gcx::GCX, builder: Self::ElementBuilder) {
             let buffer = gcx.create_buffer(
                 BufferType::ArrayBuffer,
                 &create_mesh(&builder),
@@ -372,7 +372,7 @@ mod video {
                 .push(RVideo::new(self.pending.take().unwrap(), va, gcx, builder));
         }
 
-        fn create_element(&mut self) -> Box<SSAny> {
+        fn create_node(&mut self) -> Box<SSAny> {
             let (sposition, position) = create_signal();
             let (ssize, size) = create_signal();
             let (sdrop, drop) = create_signal();
@@ -505,7 +505,7 @@ mod media {
 
     pub trait Stream: Send + Sync {
         fn ty(&self) -> StreamType;
-        fn index(&self) -> usize;
+        fn stream_index(&self) -> usize;
         fn clone_ref(&self) -> Box<dyn Stream>;
 
         fn send_packet(&self, decoder: &mut Box<dyn Any>, packet: Packet);
@@ -515,6 +515,11 @@ mod media {
         fn clear(&self);
 
         fn data(&self, index: usize) -> Option<&[u8]>;
+
+        fn audio_buffer(&self, from: usize) -> Option<Vec<f32>> {
+            None
+        }
+
         fn samples(&self) -> Option<usize> {
             None
         }
@@ -535,18 +540,20 @@ mod media {
     }
 
     pub struct VideoStream {
-        frames: Vec<VFrame>,
-        current: usize,
+        stream_index: usize,
 
+        frames: Vec<VFrame>,
         index: usize,
+        current: usize,
     }
 
     impl VideoStream {
-        pub fn new(index: usize) -> Arc<RwLock<Self>> {
+        fn new(index: usize) -> Arc<RwLock<Self>> {
             Arc::new(RwLock::new(Self {
                 frames: Vec::default(),
-                current: usize::MAX,
-                index,
+                index: usize::MAX,
+                stream_index: index,
+                current: 0,
             }))
         }
     }
@@ -556,8 +563,8 @@ mod media {
             StreamType::Video
         }
 
-        fn index(&self) -> usize {
-            self.blocking_read().index
+        fn stream_index(&self) -> usize {
+            self.blocking_read().stream_index
         }
 
         fn clone_ref(&self) -> Box<dyn Stream> {
@@ -585,14 +592,13 @@ mod media {
             self.gc();
             let s = &mut *self.try_write().unwrap();
 
-            if !s.frames.is_empty() && s.current == usize::MAX {
-                s.current = 0;
+            if !s.frames.is_empty() && s.index == usize::MAX {
+                s.index = 0;
                 return true;
             }
 
-            println!("Current: {}, Frames: {}", s.current, s.frames.len());
-            if s.current < s.frames.len() {
-                s.current += 1;
+            if s.index < s.frames.len() {
+                s.index += 1;
                 true
             } else {
                 false
@@ -602,8 +608,8 @@ mod media {
         fn prev(&self) -> bool {
             let s = &mut *self.try_write().unwrap();
 
-            if s.current > 0 {
-                s.current -= 1;
+            if s.index > 0 {
+                s.index -= 1;
                 true
             } else {
                 false
@@ -613,26 +619,26 @@ mod media {
         fn gc(&self) {
             let s = &mut *self.try_write().unwrap();
 
-            if s.current > 100 && s.current != usize::MAX {
+            if s.index > 100 && s.index != usize::MAX {
                 s.frames.drain(..50);
-                s.current -= 50;
+                s.index -= 50;
             }
         }
 
         fn clear(&self) {
             let s = &mut *self.try_write().unwrap();
-            s.current = usize::MAX;
+            s.index = usize::MAX;
             s.frames.clear();
         }
 
         fn data(&self, index: usize) -> Option<&[u8]> {
             let s = &*self.try_read().unwrap();
 
-            if s.current == usize::MAX {
+            if s.index == usize::MAX {
                 return None;
             }
 
-            let f = &s.frames[s.current];
+            let f = &s.frames[s.index];
             let data = unsafe {
                 core::slice::from_raw_parts(
                     (*f.as_ptr()).data[index],
@@ -644,18 +650,18 @@ mod media {
 
         fn width(&self) -> Option<u32> {
             let s = &*self.try_read().unwrap();
-            if s.current == usize::MAX {
+            if s.index == usize::MAX {
                 return None;
             }
-            Some(s.frames[s.current].width())
+            Some(s.frames[s.index].width())
         }
 
         fn height(&self) -> Option<u32> {
             let s = &*self.try_read().unwrap();
-            if s.current == usize::MAX {
+            if s.index == usize::MAX {
                 return None;
             }
-            Some(s.frames[s.current].height())
+            Some(s.frames[s.index].height())
         }
 
         fn current(&self) -> usize {
@@ -665,17 +671,21 @@ mod media {
 
     pub struct AudioStream {
         frames: Vec<AFrame>,
-        current: usize,
-
         index: usize,
+        current: usize,
+        forword: bool,
+
+        stream_index: usize,
     }
 
     impl AudioStream {
         pub fn new(index: usize) -> Arc<RwLock<Self>> {
             Arc::new(RwLock::new(Self {
                 frames: Vec::default(),
-                current: usize::MAX,
-                index,
+                index: usize::MAX,
+                stream_index: index,
+                current: 0,
+                forword: false,
             }))
         }
     }
@@ -685,8 +695,31 @@ mod media {
             StreamType::Audio
         }
 
-        fn index(&self) -> usize {
-            self.try_read().unwrap().index
+        fn stream_index(&self) -> usize {
+            self.try_read().unwrap().stream_index
+        }
+
+        fn audio_buffer(&self, from: usize) -> Option<Vec<f32>> {
+            let mut buffer = Vec::<f32>::with_capacity(self.samples()?);
+
+            let s = &*self.try_read().unwrap();
+
+            let diff = s.current - from;
+
+            for i in 0..diff {
+                let index = if s.forword {
+                    s.index - (diff - i)
+                } else {
+                    s.index + (diff - i)
+                };
+                if let Some(frame) = s.frames.get(index) {
+                    buffer.extend(bytemuck::cast_slice(frame.data(0)));
+                } else {
+                    eprintln!("No frame for: {index}");
+                }
+            }
+
+            Some(buffer)
         }
 
         fn send_packet(&self, decoder: &mut Box<dyn Any>, packet: Packet) {
@@ -721,14 +754,16 @@ mod media {
         fn next(&self) -> bool {
             self.gc();
             let s = &mut *self.try_write().unwrap();
+            s.forword = true;
 
-            if !s.frames.is_empty() && s.current == usize::MAX {
-                s.current = 0;
+            if !s.frames.is_empty() && s.index == usize::MAX {
+                s.index = 0;
                 return true;
             }
 
-            if s.current < s.frames.len() {
+            if s.index < s.frames.len() {
                 s.current += 1;
+                s.index += 1;
                 true
             } else {
                 false
@@ -737,9 +772,11 @@ mod media {
 
         fn prev(&self) -> bool {
             let s = &mut *self.try_write().unwrap();
+            s.forword = false;
 
-            if s.current > 0 {
-                s.current -= 1;
+            if s.index > 0 {
+                s.current += 1;
+                s.index -= 1;
                 true
             } else {
                 false
@@ -749,26 +786,26 @@ mod media {
         fn gc(&self) {
             let s = &mut *self.try_write().unwrap();
 
-            if s.current > 100 && s.current != usize::MAX {
+            if s.index > 100 && s.index != usize::MAX {
                 s.frames.drain(..50);
-                s.current -= 50;
+                s.index -= 50;
             }
         }
 
         fn clear(&self) {
             let s = &mut *self.try_write().unwrap();
-            s.current = usize::MAX;
+            s.index = usize::MAX;
             s.frames.clear();
         }
 
         fn data(&self, index: usize) -> Option<&[u8]> {
             let s = &*self.blocking_read();
 
-            if s.current == usize::MAX {
+            if s.index == usize::MAX {
                 return None;
             }
 
-            let f = &s.frames[s.current];
+            let f = &s.frames[s.index];
             let data = unsafe {
                 core::slice::from_raw_parts(
                     (*f.as_ptr()).data[index],
@@ -781,22 +818,22 @@ mod media {
         fn samples(&self) -> Option<usize> {
             let s = &*self.blocking_read();
 
-            if s.current == usize::MAX {
+            if s.index == usize::MAX {
                 return None;
             }
 
-            let f = &s.frames[s.current];
+            let f = &s.frames[s.index];
             Some(f.samples())
         }
 
         fn channels(&self) -> Option<usize> {
             let s = &*self.blocking_read();
 
-            if s.current == usize::MAX {
+            if s.index == usize::MAX {
                 return None;
             }
 
-            let f = &s.frames[s.current];
+            let f = &s.frames[s.index];
             Some(f.channels() as usize)
         }
 
@@ -923,8 +960,9 @@ mod media {
 
                 let decoder = &mut self.decoders[i];
                 self.streams[i].send_packet(decoder, packet);
+                let ready = self.streams[i].next();
                 if !readys[i] {
-                    readys[i] = self.streams[i].next()
+                    readys[i] = ready;
                 }
 
                 if readys
@@ -941,8 +979,8 @@ mod media {
 
 mod audio {
     use motion_man::{
-        element::ElementBuilder,
-        node::Node,
+        element::NodeBuilder,
+        node::NodeManager,
         signal::{create_signal, NSignal, Signal, SignalInner},
     };
 
@@ -958,8 +996,8 @@ mod audio {
         }
     }
 
-    impl ElementBuilder for AudioBuilder {
-        type Element<'a> = Audio<'a>;
+    impl NodeBuilder for AudioBuilder {
+        type Node<'a> = Audio<'a>;
 
         fn node_id(&self) -> std::any::TypeId {
             core::any::TypeId::of::<AudioNode>()
@@ -969,7 +1007,7 @@ mod audio {
             &self,
             inner: Box<dyn std::any::Any + Send + Sync + 'static>,
             scene: &'a motion_man::scene::SceneTask,
-        ) -> Self::Element<'a> {
+        ) -> Self::Node<'a> {
             let drop = *inner.downcast::<SignalInner<()>>().unwrap();
 
             Audio {
@@ -1006,16 +1044,15 @@ mod audio {
         pending: Option<NSignal<()>>,
     }
 
-    impl Node for AudioNode {
+    impl NodeManager for AudioNode {
         type ElementBuilder = AudioBuilder;
 
-        fn init_element(&mut self, gcx: &motion_man::gcx::GCX, builder: Self::ElementBuilder) {
+        fn init_node(&mut self, gcx: &motion_man::gcx::GCX, builder: Self::ElementBuilder) {
             let drop = self.pending.take().unwrap();
-            self.audios
-                .push((drop, builder.stream, Vec::new(), usize::MAX));
+            self.audios.push((drop, builder.stream, Vec::new(), 0));
         }
 
-        fn create_element(&mut self) -> Box<dyn std::any::Any + Send + Sync + 'static> {
+        fn create_node(&mut self) -> Box<dyn std::any::Any + Send + Sync + 'static> {
             let (drop, ndrop) = create_signal::<()>();
 
             self.pending = Some(ndrop);
@@ -1034,20 +1071,18 @@ mod audio {
 
         fn audio_process(&mut self, buffer: &mut [f32]) {
             for audio in self.audios.iter_mut() {
-                if audio.1.current() != audio.3 {
-                    if let Some(data) = audio.1.data(0) {
-                        let samples = audio.1.samples().unwrap() * audio.1.channels().unwrap();
-                        let buf: &[f32] = bytemuck::cast_slice(data);
-                        audio.2.extend(&buf[..samples]);
-                    }
+                if let Some(samples) = audio.1.audio_buffer(audio.3) {
+                    audio.2.extend(samples);
                     audio.3 = audio.1.current();
                 }
 
-                let mut tmp = audio
+                println!("Audio: {}, Buffer: {}", audio.2.len(), buffer.len());
+
+                let tmp = audio
                     .2
                     .drain(..buffer.len().min(audio.2.len()))
                     .collect::<Vec<f32>>();
-                tmp.resize(buffer.len(), 0.);
+
                 for i in 0..tmp.len() {
                     buffer[i] += tmp[i];
                 }
@@ -1120,26 +1155,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     stream.play().unwrap();
 
-    let mut v = vec![0.; 48000 / 2];
-    for i in 0..v.len() {
-        v[i] = f32::sin(i as f32 * 0.1);
-    }
-    sender.send(v).unwrap();
-
-    let mut v = vec![0.; 48000 / 2];
-    for (i, v) in v.iter_mut().enumerate() {
-        *v = f32::sin(i as f32 * 0.09);
-    }
-    sender.send(v).unwrap();
-
-    let mut v = vec![0.; 48000 / 2];
-    for (i, v) in v.iter_mut().enumerate() {
-        *v = f32::sin(i as f32 * 0.08);
-    }
-    sender.send(v).unwrap();
-
-    std::thread::sleep(Duration::from_secs_f32(2.0));
-
     let rt = tokio::runtime::Builder::new_current_thread().build()?;
     let _enter = rt.enter();
 
@@ -1165,12 +1180,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .spawn_element(RectBuilder::new([1., 1.], Color::RED))
                 .await;
 
-            scene.wait(fps / 2).await;
+            scene.present(fps / 2).await;
 
             rect.color.set(Color::GREEN).await;
 
             scene.update().await;
-            scene.wait(1).await;
+            scene.present(1).await;
 
             let mut rect2 = scene
                 .spawn_element(
@@ -1178,7 +1193,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )
                 .await;
 
-            scene.wait(1).await;
+            scene.present(1).await;
 
             rect2.position.tween([-0.5, -0.5], [0.5, -0.5], 1.0).await;
             rect2.position.tween([0.5, -0.5], [0.5, 0.5], 1.0).await;
@@ -1197,7 +1212,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             video.size.tween([0., 0.], [1., 1.], 1.0).await;
 
             while media.next() {
-                scene.wait(1).await;
+                scene.present(1).await;
             }
 
             video.size.tween([1., 1.], [0.1, 0.1], 1.0).await;

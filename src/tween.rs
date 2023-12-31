@@ -93,7 +93,7 @@ impl<'a> Future for TweenBuilder<'a> {
                             }
                         });
                         task.update().await;
-                        task.wait(1).await;
+                        task.present(1).await;
 
                         if tweens.is_empty() {
                             break;

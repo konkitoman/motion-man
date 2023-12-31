@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::element::ElementBuilder;
+use crate::element::NodeBuilder;
 use crate::engine_message::EngineMessage;
 use crate::ochannel;
 use crate::tween::{Tween, TweenBuilder};
@@ -16,10 +16,10 @@ pub struct SceneTask {
 }
 
 impl SceneTask {
-    pub async fn wait(&self, frames: usize) {
+    pub async fn present(&self, frames: usize) {
         for _ in 0..frames {
             let (send, recv) = ochannel();
-            let _ = self.sender.send(EngineMessage::WaitNextFrame(send)).await;
+            let _ = self.sender.send(EngineMessage::Present(send)).await;
             recv.await.unwrap();
         }
     }
@@ -37,7 +37,7 @@ impl SceneTask {
         self.info.try_read().unwrap().delta
     }
 
-    pub async fn spawn_element<T: ElementBuilder + 'static>(&self, builder: T) -> T::Element<'_> {
+    pub async fn spawn_element<T: NodeBuilder + 'static>(&self, builder: T) -> T::Node<'_> {
         let (send, recv) = ochannel();
         self.sender
             .send(EngineMessage::CreateRef(builder.node_id(), send))
@@ -56,7 +56,7 @@ impl SceneTask {
     }
 
     pub async fn update(&self) {
-        self.sender.send(EngineMessage::Submit).await;
+        self.sender.send(EngineMessage::Update).await;
     }
 
     pub fn tween<'a>(

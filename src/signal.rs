@@ -139,7 +139,7 @@ pub fn lerp(from: f32, to: f32, time: f64) -> f32 {
 impl<'a> Signal<'a, [f32; 2]> {
     pub fn tween(&mut self, from: [f32; 2], to: [f32; 2], time: f64) -> Executor {
         let mut sum = 0.;
-        Executor::new(|| Box::pin(self.scene.wait(1))).add(move |send| {
+        Executor::new(|| Box::pin(self.scene.present(1))).add(move |send| {
             Box::pin(async move {
                 while sum < 1. {
                     sum += self.scene.delta() / time;

@@ -4,14 +4,14 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
     color::Color,
-    element::ElementBuilder,
+    element::NodeBuilder,
     gcx::{
         buffer::{BufferType, BufferUsage},
         shader::Shader,
         vertex_array::{Field, Fields, VertexArray},
         PrimitiveType, GCX,
     },
-    node::Node,
+    node::NodeManager,
     scene::SceneTask,
     signal::{create_signal, NSignal, Signal, SignalInner},
     SSAny,
@@ -69,14 +69,14 @@ impl<'a> Drop for Rect<'a> {
     }
 }
 
-impl ElementBuilder for RectBuilder {
-    type Element<'a> = Rect<'a>;
+impl NodeBuilder for RectBuilder {
+    type Node<'a> = Rect<'a>;
 
     fn node_id(&self) -> TypeId {
         core::any::TypeId::of::<RectNode>()
     }
 
-    fn create_element_ref<'a>(&self, inner: Box<SSAny>, scene: &'a SceneTask) -> Self::Element<'a> {
+    fn create_element_ref<'a>(&self, inner: Box<SSAny>, scene: &'a SceneTask) -> Self::Node<'a> {
         let (position, size, color, drop): (
             SignalInner<[f32; 2]>,
             SignalInner<[f32; 2]>,
@@ -132,7 +132,7 @@ impl Fields for RectVertex {
     }
 }
 
-impl Node for RectNode {
+impl NodeManager for RectNode {
     type ElementBuilder = RectBuilder;
 
     fn init(&mut self, gcx: &GCX) {
@@ -174,7 +174,7 @@ impl Node for RectNode {
         self.shader.replace(shader);
     }
 
-    fn init_element(&mut self, gcx: &GCX, builder: Self::ElementBuilder) {
+    fn init_node(&mut self, gcx: &GCX, builder: Self::ElementBuilder) {
         let buffer = gcx.create_buffer(
             BufferType::ArrayBuffer,
             &Self::build_mesh(&builder),
@@ -199,7 +199,7 @@ impl Node for RectNode {
         });
     }
 
-    fn create_element(&mut self) -> Box<SSAny> {
+    fn create_node(&mut self) -> Box<SSAny> {
         let (nposition, position) = create_signal();
         let (nsize, size) = create_signal();
         let (ncolor, color) = create_signal();

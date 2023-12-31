@@ -13,7 +13,7 @@ use crate::{
     engine_message::{EngineMessage, EngineSender},
     gcx::GCX,
     info::Info,
-    node::AbstractNode,
+    node::AbstractNodeManager,
     scene::SceneTask,
     OSend,
 };
@@ -34,7 +34,7 @@ pub struct Engine {
 
     pub info: Arc<RwLock<Info>>,
 
-    nodes: Vec<Box<dyn AbstractNode>>,
+    nodes: Vec<Box<dyn AbstractNodeManager>>,
 
     audio_buffer: Vec<f32>,
 }
@@ -100,7 +100,7 @@ impl Engine {
         self.scenes.push(engine_scene);
     }
 
-    pub fn register_node<T: AbstractNode + Default + 'static>(&mut self) {
+    pub fn register_node<T: AbstractNodeManager + Default + 'static>(&mut self) {
         let node = T::default();
         self.nodes.push(Box::new(node));
     }
@@ -134,13 +134,13 @@ impl Engine {
             tokio::task::yield_now().await;
             if let Ok((from, msg)) = self.receiver.try_recv() {
                 match msg {
-                    EngineMessage::WaitNextFrame(send) => {
+                    EngineMessage::Present(send) => {
                         self.waiting.push(send);
                     }
                     EngineMessage::CreateElement(type_id, builder) => {
                         for node in self.nodes.iter_mut() {
                             if node.ty_id() == type_id {
-                                node.init_element(gcx, builder);
+                                node.init_node(gcx, builder);
                                 break;
                             }
                         }
@@ -148,12 +148,12 @@ impl Engine {
                     EngineMessage::CreateRef(type_id, send) => {
                         for node in self.nodes.iter_mut() {
                             if node.ty_id() == type_id {
-                                send.send(node.create_element()).unwrap();
+                                send.send(node.create_node()).unwrap();
                                 break;
                             }
                         }
                     }
-                    EngineMessage::Submit => {
+                    EngineMessage::Update => {
                         for node in self.nodes.iter_mut() {
                             node.update();
                         }
