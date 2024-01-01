@@ -2,7 +2,6 @@ use GL::HasContext;
 
 use super::{
     buffer::{Buffer, BufferType},
-    texture::Texture,
     GCX, GL,
 };
 use std::rc::Rc;

@@ -4,11 +4,12 @@ use crate::gcx::GCX;
 
 pub trait NodeManager {
     type ElementBuilder;
+    type RawNode: Send + Sync;
 
     fn init(&mut self, _gcx: &GCX) {}
 
     fn init_node(&mut self, gcx: &GCX, builder: Self::ElementBuilder);
-    fn create_node(&mut self) -> Box<dyn Any + Send + Sync + 'static>;
+    fn create_node(&mut self) -> Self::RawNode;
 
     fn update(&mut self);
     fn render(&mut self, _gcx: &GCX) {}
@@ -39,7 +40,7 @@ impl<T: NodeManager + 'static> AbstractNodeManager for T {
     }
 
     fn create_node(&mut self) -> Box<dyn Any + Send + Sync + 'static> {
-        self.create_node()
+        Box::new(self.create_node())
     }
 
     fn update(&mut self) {
@@ -57,4 +58,17 @@ impl<T: NodeManager + 'static> AbstractNodeManager for T {
     fn audio_process(&mut self, buffer: &mut [f32]) {
         self.audio_process(buffer);
     }
+}
+
+use crate::scene::SceneTask;
+
+pub trait NodeBuilder: Send + Sync {
+    type Node<'a>;
+    type NodeManager: NodeManager;
+
+    fn create_element_ref<'a>(
+        &self,
+        raw: <Self::NodeManager as NodeManager>::RawNode,
+        scene: &'a SceneTask,
+    ) -> Self::Node<'a>;
 }

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::element::NodeBuilder;
 use crate::engine_message::EngineMessage;
+use crate::node::{NodeBuilder, NodeManager};
 use crate::ochannel;
 use crate::tween::{Tween, TweenBuilder};
 use crate::{engine_message::EngineSender, info::Info};
@@ -40,14 +40,22 @@ impl SceneTask {
     pub async fn spawn_element<T: NodeBuilder + 'static>(&self, builder: T) -> T::Node<'_> {
         let (send, recv) = ochannel();
         self.sender
-            .send(EngineMessage::CreateRef(builder.node_id(), send))
+            .send(EngineMessage::CreateRef(
+                core::any::TypeId::of::<T::NodeManager>(),
+                send,
+            ))
             .await;
 
-        let element_ref = builder.create_element_ref(recv.await.unwrap(), self);
+        let boxed_raw_node = recv.await.unwrap();
+        let raw_node = *boxed_raw_node
+            .downcast::<<T::NodeManager as NodeManager>::RawNode>()
+            .unwrap();
+
+        let element_ref = builder.create_element_ref(raw_node, self);
 
         self.sender
             .send(EngineMessage::CreateElement(
-                builder.node_id(),
+                core::any::TypeId::of::<T::NodeManager>(),
                 Box::new(builder),
             ))
             .await;

@@ -6,18 +6,18 @@ use std::{
 use crate::scene::SceneTask;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
-pub struct SignalInner<T> {
+pub struct RawSignal<T> {
     sender: Sender<T>,
 }
 
 pub struct Signal<'a, T> {
-    inner: SignalInner<T>,
+    inner: RawSignal<T>,
     value: T,
     scene: &'a SceneTask,
 }
 
 impl<'a, T> Signal<'a, T> {
-    pub fn new(inner: SignalInner<T>, scene: &'a SceneTask, value: T) -> Self {
+    pub fn new(inner: RawSignal<T>, scene: &'a SceneTask, value: T) -> Self {
         Self {
             inner,
             scene,
@@ -163,7 +163,7 @@ impl<T> NSignal<T> {
     }
 }
 
-pub fn create_signal<T>() -> (SignalInner<T>, NSignal<T>) {
+pub fn create_signal<T>() -> (RawSignal<T>, NSignal<T>) {
     let (sender, receiver) = channel(1);
-    (SignalInner { sender }, NSignal { receiver })
+    (RawSignal { sender }, NSignal { receiver })
 }

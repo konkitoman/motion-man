@@ -5,10 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cpal::{
-    traits::{DeviceTrait, HostTrait, StreamTrait},
-    SampleRate,
-};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use glutin::{
     config::{Config, ConfigTemplateBuilder, GlConfig},
     context::{ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentContext},
@@ -28,13 +25,13 @@ use motion_man::{
     color::Color,
     engine::Engine,
     gcx::{BufferBit, GCX, GL},
-    rect::{RectBuilder, RectNode},
+    rect::{RectBuilder, RectNodeManager},
 };
 
 use crate::{
-    audio::{AudioBuilder, AudioNode},
+    audio::{AudioBuilder, AudioNodeManager},
     media::Media,
-    video::{VideoBuilder, VideoNode},
+    video::{VideoBuilder, VideoNodeManager},
 };
 
 pub enum SceneMessage {
@@ -170,12 +167,7 @@ fn make_context(
 }
 
 mod video {
-
-    use std::any::TypeId;
-
     use motion_man::{
-        create_cell,
-        element::NodeBuilder,
         gcx::{
             buffer::{BufferType, BufferUsage},
             shader::{Shader, ShaderBuilder},
@@ -183,13 +175,47 @@ mod video {
             vertex_array::{Field, Fields, VertexArray},
             DataType, GCX,
         },
+        node::NodeBuilder,
         node::NodeManager,
         scene::SceneTask,
-        signal::{create_signal, NSignal, Signal, SignalInner},
-        RCell, SCell, SSAny,
+        signal::{create_signal, NSignal, RawSignal, Signal},
     };
 
     use crate::media::Stream;
+
+    pub struct Video<'a> {
+        pub position: Signal<'a, [f32; 2]>,
+        pub size: Signal<'a, [f32; 2]>,
+
+        scene: &'a SceneTask,
+
+        drop: Signal<'a, ()>,
+        droped: bool,
+    }
+
+    pub struct RawVideo {
+        position: RawSignal<[f32; 2]>,
+        size: RawSignal<[f32; 2]>,
+
+        drop: RawSignal<()>,
+    }
+
+    impl<'a> Drop for Video<'a> {
+        fn drop(&mut self) {
+            if self.droped {
+                return;
+            }
+            eprintln!("You need to call on a Video, drop() when is no more needed");
+            std::process::abort();
+        }
+    }
+
+    impl<'a> Video<'a> {
+        pub async fn drop(mut self) {
+            self.drop.set(()).await;
+            self.droped = true;
+        }
+    }
 
     pub struct VideoBuilder {
         stream: Box<dyn Stream>,
@@ -209,22 +235,17 @@ mod video {
 
     impl NodeBuilder for VideoBuilder {
         type Node<'a> = Video<'a>;
-
-        fn node_id(&self) -> std::any::TypeId {
-            TypeId::of::<VideoNode>()
-        }
+        type NodeManager = VideoNodeManager;
 
         fn create_element_ref<'a>(
             &self,
-            inner: Box<SSAny>,
+            RawVideo {
+                position,
+                size,
+                drop,
+            }: RawVideo,
             scene: &'a SceneTask,
         ) -> Self::Node<'a> {
-            let (position, size, drop): (
-                SignalInner<[f32; 2]>,
-                SignalInner<[f32; 2]>,
-                SignalInner<()>,
-            ) = *inner.downcast().unwrap();
-
             Video {
                 scene,
                 droped: false,
@@ -232,33 +253,6 @@ mod video {
                 size: Signal::new(size, scene, self.size),
                 drop: Signal::new(drop, scene, ()),
             }
-        }
-    }
-
-    pub struct Video<'a> {
-        pub position: Signal<'a, [f32; 2]>,
-        pub size: Signal<'a, [f32; 2]>,
-
-        scene: &'a SceneTask,
-
-        drop: Signal<'a, ()>,
-        droped: bool,
-    }
-
-    impl<'a> Drop for Video<'a> {
-        fn drop(&mut self) {
-            if self.droped {
-                return;
-            }
-            eprintln!("You need to call on a Video, drop() when is no more needed");
-            std::process::abort();
-        }
-    }
-
-    impl<'a> Video<'a> {
-        pub async fn drop(mut self) {
-            self.drop.set(()).await;
-            self.droped = true;
         }
     }
 
@@ -296,14 +290,14 @@ mod video {
     }
 
     impl RVideo {
-        pub fn new(inner: RVideoInner, va: VertexArray, gcx: &GCX, builder: VideoBuilder) -> Self {
-            return Self {
+        pub fn new(inner: RVideoInner, va: VertexArray, _gcx: &GCX, builder: VideoBuilder) -> Self {
+            Self {
                 va,
                 stream: builder.stream.clone_ref(),
                 builder,
                 texture: None,
                 inner,
-            };
+            }
         }
     }
 
@@ -314,15 +308,16 @@ mod video {
     }
 
     #[derive(Default)]
-    pub struct VideoNode {
+    pub struct VideoNodeManager {
         videos: Vec<RVideo>,
         shader: Option<Shader>,
 
         pending: Option<RVideoInner>,
     }
 
-    impl NodeManager for VideoNode {
+    impl NodeManager for VideoNodeManager {
         type ElementBuilder = VideoBuilder;
+        type RawNode = RawVideo;
 
         fn init(&mut self, gcx: &motion_man::gcx::GCX) {
             self.shader.replace(
@@ -372,7 +367,7 @@ mod video {
                 .push(RVideo::new(self.pending.take().unwrap(), va, gcx, builder));
         }
 
-        fn create_node(&mut self) -> Box<SSAny> {
+        fn create_node(&mut self) -> RawVideo {
             let (sposition, position) = create_signal();
             let (ssize, size) = create_signal();
             let (sdrop, drop) = create_signal();
@@ -382,7 +377,12 @@ mod video {
                 size,
                 drop,
             });
-            Box::new((sposition, ssize, sdrop))
+
+            RawVideo {
+                position: sposition,
+                size: ssize,
+                drop: sdrop,
+            }
         }
 
         fn update(&mut self) {
@@ -482,7 +482,7 @@ mod video {
 }
 
 mod media {
-    use std::{any::Any, mem::MaybeUninit, path::Path, sync::Arc};
+    use std::{any::Any, path::Path, sync::Arc};
 
     use tokio::sync::RwLock;
 
@@ -979,47 +979,20 @@ mod media {
 
 mod audio {
     use motion_man::{
-        element::NodeBuilder,
+        node::NodeBuilder,
         node::NodeManager,
-        signal::{create_signal, NSignal, Signal, SignalInner},
+        signal::{create_signal, NSignal, RawSignal, Signal},
     };
 
     use crate::media::Stream;
 
-    pub struct AudioBuilder {
-        stream: Box<dyn Stream>,
-    }
-
-    impl AudioBuilder {
-        pub fn new(stream: Box<dyn Stream>) -> Self {
-            Self { stream }
-        }
-    }
-
-    impl NodeBuilder for AudioBuilder {
-        type Node<'a> = Audio<'a>;
-
-        fn node_id(&self) -> std::any::TypeId {
-            core::any::TypeId::of::<AudioNode>()
-        }
-
-        fn create_element_ref<'a>(
-            &self,
-            inner: Box<dyn std::any::Any + Send + Sync + 'static>,
-            scene: &'a motion_man::scene::SceneTask,
-        ) -> Self::Node<'a> {
-            let drop = *inner.downcast::<SignalInner<()>>().unwrap();
-
-            Audio {
-                drop: Signal::new(drop, scene, ()),
-                droped: false,
-            }
-        }
-    }
-
     pub struct Audio<'a> {
         drop: Signal<'a, ()>,
         droped: bool,
+    }
+
+    pub struct RawAudio {
+        drop: RawSignal<()>,
     }
 
     impl<'a> Audio<'a> {
@@ -1038,26 +1011,53 @@ mod audio {
         }
     }
 
+    pub struct AudioBuilder {
+        stream: Box<dyn Stream>,
+    }
+
+    impl AudioBuilder {
+        pub fn new(stream: Box<dyn Stream>) -> Self {
+            Self { stream }
+        }
+    }
+
+    impl NodeBuilder for AudioBuilder {
+        type Node<'a> = Audio<'a>;
+        type NodeManager = AudioNodeManager;
+
+        fn create_element_ref<'a>(
+            &self,
+            RawAudio { drop }: RawAudio,
+            scene: &'a motion_man::scene::SceneTask,
+        ) -> Self::Node<'a> {
+            Audio {
+                drop: Signal::new(drop, scene, ()),
+                droped: false,
+            }
+        }
+    }
+
     #[derive(Default)]
-    pub struct AudioNode {
+    pub struct AudioNodeManager {
         audios: Vec<(NSignal<()>, Box<dyn Stream>, Vec<f32>, usize)>,
         pending: Option<NSignal<()>>,
     }
 
-    impl NodeManager for AudioNode {
+    impl NodeManager for AudioNodeManager {
         type ElementBuilder = AudioBuilder;
+        type RawNode = RawAudio;
 
-        fn init_node(&mut self, gcx: &motion_man::gcx::GCX, builder: Self::ElementBuilder) {
+        fn init_node(&mut self, _gcx: &motion_man::gcx::GCX, builder: Self::ElementBuilder) {
             let drop = self.pending.take().unwrap();
             self.audios.push((drop, builder.stream, Vec::new(), 0));
         }
 
-        fn create_node(&mut self) -> Box<dyn std::any::Any + Send + Sync + 'static> {
+        fn create_node(&mut self) -> RawAudio {
             let (drop, ndrop) = create_signal::<()>();
 
             self.pending = Some(ndrop);
 
-            Box::new(drop)
+            RawAudio { drop }
         }
 
         fn update(&mut self) {
@@ -1160,9 +1160,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut engine = Engine::new(60., 1920.try_into()?, 1080.try_into()?, 48000, 2);
 
-    engine.register_node::<RectNode>();
-    engine.register_node::<VideoNode>();
-    engine.register_node::<AudioNode>();
+    engine.register_node::<RectNodeManager>();
+    engine.register_node::<VideoNodeManager>();
+    engine.register_node::<AudioNodeManager>();
 
     engine.create_scene(|scene| {
         Box::pin(async move {

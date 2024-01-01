@@ -1,20 +1,14 @@
-use std::any::{Any, TypeId};
-
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-
 use crate::{
     color::Color,
-    element::NodeBuilder,
     gcx::{
         buffer::{BufferType, BufferUsage},
         shader::Shader,
         vertex_array::{Field, Fields, VertexArray},
         PrimitiveType, GCX,
     },
-    node::NodeManager,
+    node::{NodeBuilder, NodeManager},
     scene::SceneTask,
-    signal::{create_signal, NSignal, Signal, SignalInner},
-    SSAny,
+    signal::{create_signal, NSignal, RawSignal, Signal},
 };
 
 #[derive(Debug)]
@@ -71,26 +65,16 @@ impl<'a> Drop for Rect<'a> {
 
 impl NodeBuilder for RectBuilder {
     type Node<'a> = Rect<'a>;
+    type NodeManager = RectNodeManager;
 
-    fn node_id(&self) -> TypeId {
-        core::any::TypeId::of::<RectNode>()
-    }
-
-    fn create_element_ref<'a>(&self, inner: Box<SSAny>, scene: &'a SceneTask) -> Self::Node<'a> {
-        let (position, size, color, drop): (
-            SignalInner<[f32; 2]>,
-            SignalInner<[f32; 2]>,
-            SignalInner<Color>,
-            SignalInner<()>,
-        ) = *inner.downcast().unwrap();
-
+    fn create_element_ref<'a>(&self, raw: RawRect, scene: &'a SceneTask) -> Self::Node<'a> {
         Rect {
             scene,
             droped: false,
-            position: Signal::new(position, scene, self.position),
-            size: Signal::new(size, scene, self.size),
-            color: Signal::new(color, scene, self.color),
-            drop: Signal::new(drop, scene, ()),
+            position: Signal::new(raw.position, scene, self.position),
+            size: Signal::new(raw.size, scene, self.size),
+            color: Signal::new(raw.color, scene, self.color),
+            drop: Signal::new(raw.drop, scene, ()),
         }
     }
 }
@@ -108,8 +92,15 @@ pub struct NRectInner {
     color: NSignal<Color>,
 }
 
+pub struct RawRect {
+    drop: RawSignal<()>,
+    position: RawSignal<[f32; 2]>,
+    size: RawSignal<[f32; 2]>,
+    color: RawSignal<Color>,
+}
+
 #[derive(Default)]
-pub struct RectNode {
+pub struct RectNodeManager {
     pub(super) rects: Vec<NRect>,
     pub(super) shader: Option<Shader>,
 
@@ -132,8 +123,9 @@ impl Fields for RectVertex {
     }
 }
 
-impl NodeManager for RectNode {
+impl NodeManager for RectNodeManager {
     type ElementBuilder = RectBuilder;
+    type RawNode = RawRect;
 
     fn init(&mut self, gcx: &GCX) {
         let shader = gcx
@@ -199,7 +191,7 @@ impl NodeManager for RectNode {
         });
     }
 
-    fn create_node(&mut self) -> Box<SSAny> {
+    fn create_node(&mut self) -> RawRect {
         let (nposition, position) = create_signal();
         let (nsize, size) = create_signal();
         let (ncolor, color) = create_signal();
@@ -212,7 +204,12 @@ impl NodeManager for RectNode {
             color,
         });
 
-        Box::new((nposition, nsize, ncolor, ndrop))
+        RawRect {
+            drop: ndrop,
+            position: nposition,
+            size: nsize,
+            color: ncolor,
+        }
     }
 
     fn update(&mut self) {
@@ -231,21 +228,21 @@ impl NodeManager for RectNode {
                 rebuild = true;
             }
 
-            if let Some(_) = rect.inner.drop.get() {
+            if rect.inner.drop.get().is_some() {
                 return false;
             }
 
             if rebuild {
                 rect.va
                     .array_buffer
-                    .update(0, &RectNode::build_mesh(&rect.builder));
+                    .update(0, &RectNodeManager::build_mesh(&rect.builder));
             }
             true
         });
     }
 }
 
-impl RectNode {
+impl RectNodeManager {
     fn build_mesh(builder: &RectBuilder) -> [RectVertex; 4] {
         let color = builder.color;
         let size = builder.size;
