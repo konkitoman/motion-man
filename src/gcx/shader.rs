@@ -138,7 +138,7 @@ pub enum ShaderStage {
     Compute = GL::COMPUTE_SHADER,
     Geometry = GL::GEOMETRY_SHADER,
     TessControl = GL::TESS_CONTROL_SHADER,
-    TessEveluation = GL::TESS_EVALUATION_SHADER,
+    TessEvaluation = GL::TESS_EVALUATION_SHADER,
 }
 
 #[derive(Debug)]

@@ -3,12 +3,12 @@ use std::any::{Any, TypeId};
 use crate::gcx::GCX;
 
 pub trait NodeManager {
-    type ElementBuilder;
+    type NodeBuilder: NodeBuilder;
     type RawNode: Send + Sync;
 
     fn init(&mut self, _gcx: &GCX) {}
 
-    fn init_node(&mut self, gcx: &GCX, builder: Self::ElementBuilder);
+    fn init_node(&mut self, gcx: &GCX, builder: Self::NodeBuilder);
     fn create_node(&mut self) -> Self::RawNode;
 
     fn update(&mut self);
@@ -35,7 +35,7 @@ impl<T: NodeManager + 'static> AbstractNodeManager for T {
     }
 
     fn init_node(&mut self, gcx: &GCX, builder: Box<dyn Any + Send + Sync + 'static>) {
-        let builder = Box::<dyn Any + Send + Sync>::downcast::<T::ElementBuilder>(builder).unwrap();
+        let builder = Box::<dyn Any + Send + Sync>::downcast::<T::NodeBuilder>(builder).unwrap();
         self.init_node(gcx, *builder);
     }
 
@@ -66,7 +66,7 @@ pub trait NodeBuilder: Send + Sync {
     type Node<'a>;
     type NodeManager: NodeManager;
 
-    fn create_element_ref<'a>(
+    fn create_node_ref<'a>(
         &self,
         raw: <Self::NodeManager as NodeManager>::RawNode,
         scene: &'a SceneTask,

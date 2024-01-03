@@ -41,20 +41,20 @@ pub struct Rect<'a> {
     pub color: Signal<'a, Color>,
 
     drop: Signal<'a, ()>,
-    droped: bool,
+    dropped: bool,
 }
 
 impl<'a> Rect<'a> {
     pub async fn drop(mut self) {
         self.drop.set(()).await;
         self.scene.update().await;
-        self.droped = true;
+        self.dropped = true;
     }
 }
 
 impl<'a> Drop for Rect<'a> {
     fn drop(&mut self) {
-        if self.droped {
+        if self.dropped {
             return;
         }
 
@@ -67,10 +67,10 @@ impl NodeBuilder for RectBuilder {
     type Node<'a> = Rect<'a>;
     type NodeManager = RectNodeManager;
 
-    fn create_element_ref<'a>(&self, raw: RawRect, scene: &'a SceneTask) -> Self::Node<'a> {
+    fn create_node_ref<'a>(&self, raw: RawRect, scene: &'a SceneTask) -> Self::Node<'a> {
         Rect {
             scene,
-            droped: false,
+            dropped: false,
             position: Signal::new(raw.position, scene, self.position),
             size: Signal::new(raw.size, scene, self.size),
             color: Signal::new(raw.color, scene, self.color),
@@ -124,7 +124,7 @@ impl Fields for RectVertex {
 }
 
 impl NodeManager for RectNodeManager {
-    type ElementBuilder = RectBuilder;
+    type NodeBuilder = RectBuilder;
     type RawNode = RawRect;
 
     fn init(&mut self, gcx: &GCX) {
@@ -166,7 +166,7 @@ impl NodeManager for RectNodeManager {
         self.shader.replace(shader);
     }
 
-    fn init_node(&mut self, gcx: &GCX, builder: Self::ElementBuilder) {
+    fn init_node(&mut self, gcx: &GCX, builder: Self::NodeBuilder) {
         let buffer = gcx.create_buffer(
             BufferType::ArrayBuffer,
             &Self::build_mesh(&builder),

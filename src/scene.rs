@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::engine_message::EngineMessage;
+use crate::engine_message::{EngineMessage, Ty};
 use crate::node::{NodeBuilder, NodeManager};
 use crate::ochannel;
 use crate::tween::{Tween, TweenBuilder};
@@ -16,6 +16,9 @@ pub struct SceneTask {
 }
 
 impl SceneTask {
+    /// this will render how many frames that we say!
+    /// if `frames == 0` then will do nothing!
+    /// on every frame will the `NodeManager` `render` and `audio_process` will be called!
     pub async fn present(&self, frames: usize) {
         for _ in 0..frames {
             let (send, recv) = ochannel();
@@ -37,13 +40,11 @@ impl SceneTask {
         self.info.try_read().unwrap().delta
     }
 
-    pub async fn spawn_element<T: NodeBuilder + 'static>(&self, builder: T) -> T::Node<'_> {
+    /// this will spawn a Node
+    pub async fn spawn<T: NodeBuilder + 'static>(&self, builder: T) -> T::Node<'_> {
         let (send, recv) = ochannel();
         self.sender
-            .send(EngineMessage::CreateRef(
-                core::any::TypeId::of::<T::NodeManager>(),
-                send,
-            ))
+            .send(EngineMessage::CreateRef(Ty::of::<T::NodeManager>(), send))
             .await;
 
         let boxed_raw_node = recv.await.unwrap();
@@ -51,11 +52,11 @@ impl SceneTask {
             .downcast::<<T::NodeManager as NodeManager>::RawNode>()
             .unwrap();
 
-        let element_ref = builder.create_element_ref(raw_node, self);
+        let element_ref = builder.create_node_ref(raw_node, self);
 
         self.sender
-            .send(EngineMessage::CreateElement(
-                core::any::TypeId::of::<T::NodeManager>(),
+            .send(EngineMessage::CreateNode(
+                Ty::of::<T::NodeManager>(),
                 Box::new(builder),
             ))
             .await;

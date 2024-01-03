@@ -34,9 +34,200 @@ use crate::{
     video::{VideoBuilder, VideoNodeManager},
 };
 
-pub enum SceneMessage {
-    NextFrame,
-    Resumed,
+fn main() -> Result<(), Box<dyn Error>> {
+    // tokio manual setup! :)
+    // this is because we use single threaded!
+    // i don't think this will work on a multithreaded application because i use `try_read and try_write`
+    // because is outside of async
+    let rt = tokio::runtime::Builder::new_current_thread().build()?;
+    let _enter = rt.enter();
+
+    // With this we create ower video engine 60 fps 1920x1080, audio 48KHz, 2 channels
+    let mut engine = Engine::new(60., 1920.try_into()?, 1080.try_into()?, 48000, 2);
+
+    // Here we register the nodes that we will need!
+
+    engine.register_node::<RectNodeManager>();
+    engine.register_node::<VideoNodeManager>();
+    engine.register_node::<AudioNodeManager>();
+
+    // This is the video that will create!
+    engine.create_scene(|scene| {
+        Box::pin(async move {
+            scene
+                .info(|info| {
+                    println!("FPS: {}", info.fps());
+                    println!("Width: {}", info.width);
+                    println!("Height: {}", info.height);
+                })
+                .await;
+
+            let fps = scene.fps(); // = 60
+
+            // we create a rect bigger as the screen with the red color!
+            let mut rect = scene.spawn(RectBuilder::new([1., 1.], Color::RED)).await;
+
+            // `scene.present()` will render that many frames!
+            //this is to see the red rectangle
+            scene.present(fps / 2).await;
+
+            // the set will call `scene.update()` that will update every node manager
+            rect.color.set(Color::GREEN).await;
+
+            scene.present(1).await;
+
+            let mut rect2 = scene
+                .spawn(RectBuilder::new([0.5, 0.5], Color::BLUE).with_position([-0.5, -0.5]))
+                .await;
+
+            scene.present(1).await;
+
+            //                       from          to      time
+            rect2.position.tween([-0.5, -0.5], [0.5, -0.5], 1.0).await;
+            rect2.position.tween([0.5, -0.5], [0.5, 0.5], 1.0).await;
+            rect2.position.tween([0.5, 0.5], [-0.5, 0.5], 1.0).await;
+            rect2.position.tween([-0.5, 0.5], [-0.5, -0.5], 1.0).await;
+            rect2.position.tween([-0.5, -0.5], [0., 0.], 1.0).await;
+
+            // Play a video if is avalibile!
+            if let Ok(mut media) = Media::new("video.mkv") {
+                let mut video = scene
+                    .spawn(VideoBuilder::new(media.video(0).unwrap()))
+                    .await;
+                let audio = scene
+                    .spawn(AudioBuilder::new(media.audio(0).unwrap()))
+                    .await;
+
+                video.size.tween([0., 0.], [1., 1.], 1.0).await;
+
+                while media.next() {
+                    scene.present(1).await;
+                }
+
+                video.size.tween([1., 1.], [0.1, 0.1], 1.0).await;
+
+                audio.drop().await;
+                video.drop().await;
+            }
+
+            rect2.size.tween([0.5, 0.5], [0., 0.], 1.0).await;
+            // this is a custom drop that will send a drop signal to the node manager then i will call `scene.update()`
+            //  this will remove the node from the node manager, and will be allow to safely drop
+            // if this is not called the engine will panic or abort!
+            rect2.drop().await;
+
+            rect.size.tween([1., 1.], [0., 0.], 1.0).await;
+            rect.drop().await;
+        })
+    });
+
+    // This is the backend
+    // currencly will make a window and render on thet window every 1/fps the fps is specified in engine creation!
+
+    ffmpeg_next::init().unwrap();
+    let version = ffmpeg_next::util::version();
+    println!("FFMPEG: {version}");
+
+    {
+        ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Trace);
+        ffmpeg_next::log::set_flags(ffmpeg_next::log::Flags::SKIP_REPEATED);
+    }
+
+    println!("Hosts: {:?}", cpal::ALL_HOSTS);
+
+    let host = cpal::host_from_id(cpal::ALL_HOSTS[0]).unwrap();
+    let output = host.default_output_device().unwrap();
+
+    let name = output.name().unwrap();
+    println!("Output Device Name: {name}");
+
+    let configs = output.supported_output_configs().unwrap();
+    for config in configs {
+        println!("Config: {config:?}");
+    }
+
+    let config = output.default_output_config().unwrap();
+    println!("Default Output Config: {config:?}");
+
+    let config = cpal::SupportedStreamConfig::new(
+        2,
+        cpal::SampleRate(48000),
+        config.buffer_size().clone(),
+        cpal::SampleFormat::F32,
+    );
+
+    println!("Using config: {config:?}");
+
+    let (sender, receiver) = channel::<Vec<f32>>();
+    let mut buffer = Vec::<f32>::new();
+
+    let stream = output
+        .build_output_stream(
+            &config.config(),
+            move |out: &mut [f32], _callback_info| {
+                while let Ok(buf) = receiver.try_recv() {
+                    buffer.extend(buf);
+                }
+
+                let mut tmp = buffer
+                    .drain(..out.len().min(buffer.len()))
+                    .collect::<Vec<f32>>();
+                tmp.resize(out.len(), 0.);
+
+                for (i, s) in tmp.into_iter().enumerate() {
+                    out[i] = s;
+                }
+            },
+            |err| {
+                println!("Audio Error: {err:?}");
+            },
+            None,
+        )
+        .unwrap();
+
+    stream.play().unwrap();
+
+    let width = engine.info.try_read().unwrap().width;
+    let height = engine.info.try_read().unwrap().height;
+
+    let (event_loop, window, config, context, surface, gl) =
+        make_context(WindowBuilder::new().with_title("Motion Man"))?;
+    let gcx = GCX::new(Rc::new(gl));
+    _ = window.request_inner_size(LogicalSize::new(width.get(), height.get()));
+    surface.resize(&context, width, height);
+    gcx.viewport(0, 0, width.get() as i32, height.get() as i32);
+
+    engine.init(&gcx);
+
+    loop {
+        let instant = Instant::now();
+        gcx.clear_color(0xff);
+        gcx.clear(BufferBit::COLOR);
+
+        rt.block_on(engine.run(&gcx));
+
+        engine.render(&gcx);
+        let buffer = engine.audio_buffer();
+        sender.send(buffer.to_vec()).unwrap();
+        surface.swap_buffers(&context).unwrap();
+
+        if let Some(remaining) = Duration::from_secs_f64(engine.info.blocking_read().delta)
+            .checked_sub(instant.elapsed())
+        {
+            std::thread::sleep(remaining);
+        } else {
+            eprintln!(
+                "Cannot keep up!!! late with: {}s",
+                instant.elapsed().as_secs_f64()
+            );
+        }
+
+        if engine.finished() {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 fn make_context(
@@ -190,7 +381,7 @@ mod video {
         scene: &'a SceneTask,
 
         drop: Signal<'a, ()>,
-        droped: bool,
+        dropped: bool,
     }
 
     pub struct RawVideo {
@@ -202,7 +393,7 @@ mod video {
 
     impl<'a> Drop for Video<'a> {
         fn drop(&mut self) {
-            if self.droped {
+            if self.dropped {
                 return;
             }
             eprintln!("You need to call on a Video, drop() when is no more needed");
@@ -213,7 +404,7 @@ mod video {
     impl<'a> Video<'a> {
         pub async fn drop(mut self) {
             self.drop.set(()).await;
-            self.droped = true;
+            self.dropped = true;
         }
     }
 
@@ -237,7 +428,7 @@ mod video {
         type Node<'a> = Video<'a>;
         type NodeManager = VideoNodeManager;
 
-        fn create_element_ref<'a>(
+        fn create_node_ref<'a>(
             &self,
             RawVideo {
                 position,
@@ -248,7 +439,7 @@ mod video {
         ) -> Self::Node<'a> {
             Video {
                 scene,
-                droped: false,
+                dropped: false,
                 position: Signal::new(position, scene, self.pos),
                 size: Signal::new(size, scene, self.size),
                 drop: Signal::new(drop, scene, ()),
@@ -316,7 +507,7 @@ mod video {
     }
 
     impl NodeManager for VideoNodeManager {
-        type ElementBuilder = VideoBuilder;
+        type NodeBuilder = VideoBuilder;
         type RawNode = RawVideo;
 
         fn init(&mut self, gcx: &motion_man::gcx::GCX) {
@@ -355,7 +546,7 @@ mod video {
             );
         }
 
-        fn init_node(&mut self, gcx: &motion_man::gcx::GCX, builder: Self::ElementBuilder) {
+        fn init_node(&mut self, gcx: &motion_man::gcx::GCX, builder: Self::NodeBuilder) {
             let buffer = gcx.create_buffer(
                 BufferType::ArrayBuffer,
                 &create_mesh(&builder),
@@ -713,7 +904,19 @@ mod media {
                     s.index + (diff - i)
                 };
                 if let Some(frame) = s.frames.get(index) {
-                    buffer.extend(bytemuck::cast_slice(frame.data(0)));
+                    let mut plane1 = frame.plane::<f32>(0)[..].iter();
+                    let mut plane2 = frame.plane::<f32>(1)[..].iter();
+                    let mut state = true;
+
+                    buffer.extend(core::iter::from_fn(move || {
+                        if state {
+                            state = false;
+                            plane1.next()
+                        } else {
+                            state = true;
+                            plane2.next()
+                        }
+                    }));
                 } else {
                     eprintln!("No frame for: {index}");
                 }
@@ -731,13 +934,13 @@ mod media {
             }
 
             let mut dst = AFrame::new(
-                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
                 frame.samples(),
                 ChannelLayout::STEREO,
             );
             let mut sws = frame
                 .resampler(
-                    ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                    ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
                     ChannelLayout::STEREO,
                     48000,
                 )
@@ -988,7 +1191,7 @@ mod audio {
 
     pub struct Audio<'a> {
         drop: Signal<'a, ()>,
-        droped: bool,
+        dropped: bool,
     }
 
     pub struct RawAudio {
@@ -998,13 +1201,13 @@ mod audio {
     impl<'a> Audio<'a> {
         pub async fn drop(mut self) {
             self.drop.set(()).await;
-            self.droped = true;
+            self.dropped = true;
         }
     }
 
     impl<'a> Drop for Audio<'a> {
         fn drop(&mut self) {
-            if !self.droped {
+            if !self.dropped {
                 eprintln!("You need to call drop on Audio when is no more needed!");
                 std::process::abort();
             }
@@ -1025,14 +1228,14 @@ mod audio {
         type Node<'a> = Audio<'a>;
         type NodeManager = AudioNodeManager;
 
-        fn create_element_ref<'a>(
+        fn create_node_ref<'a>(
             &self,
             RawAudio { drop }: RawAudio,
             scene: &'a motion_man::scene::SceneTask,
         ) -> Self::Node<'a> {
             Audio {
                 drop: Signal::new(drop, scene, ()),
-                droped: false,
+                dropped: false,
             }
         }
     }
@@ -1044,10 +1247,10 @@ mod audio {
     }
 
     impl NodeManager for AudioNodeManager {
-        type ElementBuilder = AudioBuilder;
+        type NodeBuilder = AudioBuilder;
         type RawNode = RawAudio;
 
-        fn init_node(&mut self, _gcx: &motion_man::gcx::GCX, builder: Self::ElementBuilder) {
+        fn init_node(&mut self, _gcx: &motion_man::gcx::GCX, builder: Self::NodeBuilder) {
             let drop = self.pending.take().unwrap();
             self.audios.push((drop, builder.stream, Vec::new(), 0));
         }
@@ -1076,8 +1279,6 @@ mod audio {
                     audio.3 = audio.1.current();
                 }
 
-                println!("Audio: {}, Buffer: {}", audio.2.len(), buffer.len());
-
                 let tmp = audio
                     .2
                     .drain(..buffer.len().min(audio.2.len()))
@@ -1089,184 +1290,4 @@ mod audio {
             }
         }
     }
-}
-
-fn main() -> Result<(), Box<dyn Error>> {
-    ffmpeg_next::init().unwrap();
-    let version = ffmpeg_next::util::version();
-    println!("FFMPEG: {version}");
-
-    {
-        // ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Trace);
-        // ffmpeg_next::log::set_flags(ffmpeg_next::log::Flags::SKIP_REPEATED);
-    }
-
-    println!("Hosts: {:?}", cpal::ALL_HOSTS);
-
-    let host = cpal::host_from_id(cpal::ALL_HOSTS[0]).unwrap();
-    let output = host.default_output_device().unwrap();
-
-    let name = output.name().unwrap();
-    println!("Output Device Name: {name}");
-
-    let configs = output.supported_output_configs().unwrap();
-    for config in configs {
-        println!("Config: {config:?}");
-    }
-
-    let config = output.default_output_config().unwrap();
-    println!("Default Output Config: {config:?}");
-
-    let config = cpal::SupportedStreamConfig::new(
-        2,
-        cpal::SampleRate(48000),
-        config.buffer_size().clone(),
-        cpal::SampleFormat::F32,
-    );
-
-    println!("Using config: {config:?}");
-
-    let (sender, receiver) = channel::<Vec<f32>>();
-    let mut buffer = Vec::<f32>::new();
-
-    let stream = output
-        .build_output_stream(
-            &config.config(),
-            move |out: &mut [f32], _callback_info| {
-                while let Ok(buf) = receiver.try_recv() {
-                    buffer.extend(buf);
-                }
-
-                let mut tmp = buffer
-                    .drain(..out.len().min(buffer.len()))
-                    .collect::<Vec<f32>>();
-                tmp.resize(out.len(), 0.);
-
-                for (i, s) in tmp.into_iter().enumerate() {
-                    out[i] = s;
-                }
-            },
-            |err| {
-                println!("Audio Error: {err:?}");
-            },
-            None,
-        )
-        .unwrap();
-
-    stream.play().unwrap();
-
-    let rt = tokio::runtime::Builder::new_current_thread().build()?;
-    let _enter = rt.enter();
-
-    let mut engine = Engine::new(60., 1920.try_into()?, 1080.try_into()?, 48000, 2);
-
-    engine.register_node::<RectNodeManager>();
-    engine.register_node::<VideoNodeManager>();
-    engine.register_node::<AudioNodeManager>();
-
-    engine.create_scene(|scene| {
-        Box::pin(async move {
-            scene
-                .info(|info| {
-                    println!("FPS: {}", info.fps());
-                    println!("Width: {}", info.width);
-                    println!("Height: {}", info.height);
-                })
-                .await;
-
-            let fps = scene.fps();
-
-            let mut rect = scene
-                .spawn_element(RectBuilder::new([1., 1.], Color::RED))
-                .await;
-
-            scene.present(fps / 2).await;
-
-            rect.color.set(Color::GREEN).await;
-
-            scene.update().await;
-            scene.present(1).await;
-
-            let mut rect2 = scene
-                .spawn_element(
-                    RectBuilder::new([0.5, 0.5], Color::BLUE).with_position([-0.5, -0.5]),
-                )
-                .await;
-
-            scene.present(1).await;
-
-            rect2.position.tween([-0.5, -0.5], [0.5, -0.5], 1.0).await;
-            rect2.position.tween([0.5, -0.5], [0.5, 0.5], 1.0).await;
-            rect2.position.tween([0.5, 0.5], [-0.5, 0.5], 1.0).await;
-            rect2.position.tween([-0.5, 0.5], [-0.5, -0.5], 1.0).await;
-            rect2.position.tween([-0.5, -0.5], [0., 0.], 1.0).await;
-
-            let mut media = Media::new("video.mkv").unwrap();
-            let mut video = scene
-                .spawn_element(VideoBuilder::new(media.video(0).unwrap()))
-                .await;
-            let audio = scene
-                .spawn_element(AudioBuilder::new(media.audio(0).unwrap()))
-                .await;
-
-            video.size.tween([0., 0.], [1., 1.], 1.0).await;
-
-            while media.next() {
-                scene.present(1).await;
-            }
-
-            video.size.tween([1., 1.], [0.1, 0.1], 1.0).await;
-
-            audio.drop().await;
-            video.drop().await;
-
-            rect2.size.tween([0.5, 0.5], [0., 0.], 1.0).await;
-            rect2.drop().await;
-
-            rect.size.tween([1., 1.], [0., 0.], 1.0).await;
-            rect.drop().await;
-        })
-    });
-
-    let width = engine.info.try_read().unwrap().width;
-    let height = engine.info.try_read().unwrap().height;
-
-    let (event_loop, window, config, context, surface, gl) =
-        make_context(WindowBuilder::new().with_title("Motion Man"))?;
-    let gcx = GCX::new(Rc::new(gl));
-    _ = window.request_inner_size(LogicalSize::new(width.get(), height.get()));
-    surface.resize(&context, width, height);
-    gcx.viewport(0, 0, width.get() as i32, height.get() as i32);
-
-    engine.init(&gcx);
-
-    loop {
-        let instant = Instant::now();
-        gcx.clear_color(0xff);
-        gcx.clear(BufferBit::COLOR);
-
-        rt.block_on(engine.run(&gcx));
-
-        engine.render(&gcx);
-        let buffer = engine.audio_buffer();
-        sender.send(buffer.to_vec()).unwrap();
-        surface.swap_buffers(&context).unwrap();
-
-        if let Some(remaining) = Duration::from_secs_f64(engine.info.blocking_read().delta)
-            .checked_sub(instant.elapsed())
-        {
-            std::thread::sleep(remaining);
-        } else {
-            eprintln!(
-                "Cannot keep up!!! late with: {}s",
-                instant.elapsed().as_secs_f64()
-            );
-        }
-
-        if engine.finished() {
-            break;
-        }
-    }
-
-    Ok(())
 }

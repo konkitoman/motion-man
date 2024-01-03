@@ -56,7 +56,7 @@ impl Engine {
 
         let (engine_sender, receiver) = channel(8);
 
-        let audio_buffer = vec![0.; ((samples * channels) as f64 / fps).round() as usize];
+        let audio_buffer = vec![0.; ((samples * channels) as f64 / fps) as usize];
 
         println!("Engine Audio Buffer Size: {}", audio_buffer.len());
 
@@ -130,28 +130,30 @@ impl Engine {
             waiting.send(()).unwrap();
         }
 
-        loop {
+        'process: loop {
             tokio::task::yield_now().await;
             if let Ok((from, msg)) = self.receiver.try_recv() {
                 match msg {
                     EngineMessage::Present(send) => {
                         self.waiting.push(send);
                     }
-                    EngineMessage::CreateElement(type_id, builder) => {
+                    EngineMessage::CreateNode(ty, builder) => {
                         for node in self.nodes.iter_mut() {
-                            if node.ty_id() == type_id {
+                            if node.ty_id() == ty.id {
                                 node.init_node(gcx, builder);
                                 break;
                             }
                         }
                     }
-                    EngineMessage::CreateRef(type_id, send) => {
+                    EngineMessage::CreateRef(ty, send) => {
                         for node in self.nodes.iter_mut() {
-                            if node.ty_id() == type_id {
+                            if node.ty_id() == ty.id {
                                 send.send(node.create_node()).unwrap();
-                                break;
+                                continue 'process;
                             }
                         }
+
+                        panic!("The `{}` is not registered! You need to call `Engine::register::<{0}>()`", ty.name);
                     }
                     EngineMessage::Update => {
                         for node in self.nodes.iter_mut() {

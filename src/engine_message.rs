@@ -5,9 +5,23 @@ use tokio::sync::mpsc::Sender;
 use crate::OSend;
 
 #[derive(Debug)]
+pub struct Ty {
+    pub id: TypeId,
+    pub name: &'static str,
+}
+
+impl Ty {
+    pub fn of<T: 'static>() -> Self {
+        let id = TypeId::of::<T>();
+        let name = core::any::type_name::<T>();
+        Self { id, name }
+    }
+}
+
+#[derive(Debug)]
 pub enum EngineMessage {
-    CreateRef(TypeId, OSend<Box<dyn Any + Send + Sync + 'static>>),
-    CreateElement(TypeId, Box<dyn Any + Send + Sync + 'static>),
+    CreateRef(Ty, OSend<Box<dyn Any + Send + Sync + 'static>>),
+    CreateNode(Ty, Box<dyn Any + Send + Sync + 'static>),
     Present(OSend<()>),
     Update,
 }
