@@ -1,35 +1,14 @@
-use std::{
-    error::Error,
-    rc::Rc,
-    sync::mpsc::channel,
-    time::{Duration, Instant},
-};
-
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use glutin::{
-    config::{Config, ConfigTemplateBuilder, GlConfig},
-    context::{ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentContext},
-    display::{GetGlDisplay, GlDisplay},
-    surface::{GlSurface, Surface, SurfaceAttributesBuilder, WindowSurface},
-};
-use raw_window_handle::HasRawWindowHandle;
-
-use winit::{
-    dpi::LogicalSize,
-    event_loop::{EventLoop, EventLoopBuilder},
-    window::WindowBuilder,
-};
-use GL::HasContext;
+use std::error::Error;
 
 use motion_man::{
     color::Color,
     engine::Engine,
-    gcx::{BufferBit, GCX, GL},
     rect::{RectBuilder, RectNodeManager},
 };
 
 use crate::{
     audio::{AudioBuilder, AudioNodeManager},
+    backend::Backend,
     media::Media,
     video::{VideoBuilder, VideoNodeManager},
 };
@@ -122,239 +101,372 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     // This is the backend
-    // currencly will make a window and render on thet window every 1/fps the fps is specified in engine creation!
+    let backend = Backend::new(engine, rt);
 
-    ffmpeg_next::init().unwrap();
-    let version = ffmpeg_next::util::version();
-    println!("FFMPEG: {version}");
-
-    {
-        ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Trace);
-        ffmpeg_next::log::set_flags(ffmpeg_next::log::Flags::SKIP_REPEATED);
-    }
-
-    println!("Hosts: {:?}", cpal::ALL_HOSTS);
-
-    let host = cpal::host_from_id(cpal::ALL_HOSTS[0]).unwrap();
-    let output = host.default_output_device().unwrap();
-
-    let name = output.name().unwrap();
-    println!("Output Device Name: {name}");
-
-    let configs = output.supported_output_configs().unwrap();
-    for config in configs {
-        println!("Config: {config:?}");
-    }
-
-    let config = output.default_output_config().unwrap();
-    println!("Default Output Config: {config:?}");
-
-    let config = cpal::SupportedStreamConfig::new(
-        2,
-        cpal::SampleRate(48000),
-        config.buffer_size().clone(),
-        cpal::SampleFormat::F32,
-    );
-
-    println!("Using config: {config:?}");
-
-    let (sender, receiver) = channel::<Vec<f32>>();
-    let mut buffer = Vec::<f32>::new();
-
-    let stream = output
-        .build_output_stream(
-            &config.config(),
-            move |out: &mut [f32], _callback_info| {
-                while let Ok(buf) = receiver.try_recv() {
-                    buffer.extend(buf);
-                }
-
-                let mut tmp = buffer
-                    .drain(..out.len().min(buffer.len()))
-                    .collect::<Vec<f32>>();
-                tmp.resize(out.len(), 0.);
-
-                for (i, s) in tmp.into_iter().enumerate() {
-                    out[i] = s;
-                }
-            },
-            |err| {
-                println!("Audio Error: {err:?}");
-            },
-            None,
-        )
-        .unwrap();
-
-    stream.play().unwrap();
-
-    let width = engine.info.try_read().unwrap().width;
-    let height = engine.info.try_read().unwrap().height;
-
-    let (event_loop, window, config, context, surface, gl) =
-        make_context(WindowBuilder::new().with_title("Motion Man"))?;
-    let gcx = GCX::new(Rc::new(gl));
-    _ = window.request_inner_size(LogicalSize::new(width.get(), height.get()));
-    surface.resize(&context, width, height);
-    gcx.viewport(0, 0, width.get() as i32, height.get() as i32);
-
-    engine.init(&gcx);
-
-    loop {
-        let instant = Instant::now();
-        gcx.clear_color(0xff);
-        gcx.clear(BufferBit::COLOR);
-
-        rt.block_on(engine.run(&gcx));
-
-        engine.render(&gcx);
-        let buffer = engine.audio_buffer();
-        sender.send(buffer.to_vec()).unwrap();
-        surface.swap_buffers(&context).unwrap();
-
-        if let Some(remaining) = Duration::from_secs_f64(engine.info.blocking_read().delta)
-            .checked_sub(instant.elapsed())
-        {
-            std::thread::sleep(remaining);
-        } else {
-            eprintln!(
-                "Cannot keep up!!! late with: {}s",
-                instant.elapsed().as_secs_f64()
-            );
-        }
-
-        if engine.finished() {
-            break;
-        }
-    }
+    // This will show a window, you can press Space to play/pause
+    backend.preview();
 
     Ok(())
 }
 
-fn make_context(
-    builder: WindowBuilder,
-) -> Result<
-    (
-        EventLoop<()>,
-        winit::window::Window,
-        Config,
-        PossiblyCurrentContext,
-        Surface<WindowSurface>,
-        GL::Context,
-    ),
-    Box<dyn Error>,
-> {
-    let event_loop = EventLoopBuilder::new().build().unwrap();
+mod backend {
+    use std::rc::Rc;
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+    use std::time::Instant;
 
-    let (_, config) = glutin_winit::DisplayBuilder::new()
-        .build(&event_loop, ConfigTemplateBuilder::new(), |config| {
-            let configs = config.collect::<Vec<_>>();
-            let mut config = configs.first().unwrap().clone();
-            let mut index = 0;
-            println!("Configs:");
-            for (i, new_config) in configs.into_iter().enumerate() {
-                config = new_config;
-                let color_buffer_type = config.color_buffer_type();
-                let float_pixels = config.float_pixels();
-                let alpha_size = config.alpha_size();
-                let depth_size = config.depth_size();
-                let stencil_size = config.stencil_size();
-                let num_samples = config.num_samples();
-                let srgb_capable = config.srgb_capable();
-                let supports_transparency = config.supports_transparency();
-                let hardware_accelerated = config.hardware_accelerated();
-                let config_surface_types = config.config_surface_types();
-                let api = config.api();
-                println!("{i}:");
-                println!("  ColorBufferType: {color_buffer_type:?}");
-                println!("  FloatPixels: {float_pixels}");
-                println!("  AlphaSize: {alpha_size}");
-                println!("  DepthSize: {depth_size}");
-                println!("  StencilSize: {stencil_size}");
-                println!("  NumSamples: {num_samples}");
-                println!("  SrgbCapable: {srgb_capable}");
-                println!("  SupportsTransparency: {supports_transparency:?}");
-                println!("  HardwareAccelerated: {hardware_accelerated}");
-                println!("  SurfaceTypes: {config_surface_types:?}");
-                println!("  Api: {api:?}");
-                match config {
-                    Config::Egl(_) => println!("  Backend: EGL"),
-                    Config::Glx(_) => println!("  Backend: Glx"),
-                    _ => {
-                        println!("  Backend: Unknown")
-                    }
-                }
-                index = i;
-            }
-            println!("Was selected: {index}");
-            config
-        })
-        .unwrap();
+    use cpal::traits::DeviceTrait;
+    use cpal::traits::HostTrait;
+    use cpal::traits::StreamTrait;
+    use glutin::config::Config;
+    use glutin::config::ConfigTemplateBuilder;
+    use glutin::config::GlConfig;
+    use glutin::context::ContextAttributes;
+    use glutin::context::ContextAttributesBuilder;
+    use glutin::context::NotCurrentGlContext;
+    use glutin::context::PossiblyCurrentContext;
+    use glutin::display::Display;
+    use glutin::display::GetGlDisplay;
+    use glutin::display::GlDisplay;
+    use glutin::surface::GlSurface;
+    use glutin::surface::Surface;
+    use glutin::surface::SurfaceAttributes;
+    use glutin::surface::SurfaceAttributesBuilder;
+    use glutin::surface::WindowSurface;
+    use glutin_winit::DisplayBuilder;
+    use motion_man::engine::Engine;
+    use motion_man::gcx::GCX;
+    use raw_window_handle::HasRawWindowHandle;
+    use tokio::runtime::Runtime;
+    use winit::event::Event;
+    use winit::event::WindowEvent;
+    use winit::event_loop::EventLoopBuilder;
+    use winit::event_loop::EventLoopWindowTarget;
+    use winit::keyboard::KeyCode;
+    use winit::keyboard::PhysicalKey;
+    use winit::window::Window;
+    use winit::window::WindowBuilder;
 
-    let display = config.display();
-    let context = unsafe {
-        display
-            .create_context(&config, &ContextAttributesBuilder::new().build(None))
-            .unwrap()
-    };
-
-    let window = glutin_winit::finalize_window(&event_loop, builder, &config).unwrap();
-
-    let surface = unsafe {
-        display
-            .create_window_surface(
-                &config,
-                &SurfaceAttributesBuilder::<WindowSurface>::new().build(
-                    window.raw_window_handle(),
-                    500.try_into()?,
-                    500.try_into()?,
-                ),
-            )
-            .unwrap()
-    };
-
-    let context = context.make_current(&surface).unwrap();
-
-    let mut gl =
-        unsafe { GL::Context::from_loader_function_cstr(|c_str| display.get_proc_address(c_str)) };
-
-    unsafe {
-        gl.debug_message_callback(|source, ty, severity, d, detalis| {
-            let source = match source {
-                GL::DEBUG_SOURCE_API => "Api".into(),
-                GL::DEBUG_SOURCE_APPLICATION => "Application".into(),
-                GL::DEBUG_SOURCE_OTHER => "Other".into(),
-                GL::DEBUG_SOURCE_SHADER_COMPILER => "ShaderCompiler".into(),
-                GL::DEBUG_SOURCE_THIRD_PARTY => "ThirdParty".into(),
-                GL::DEBUG_SOURCE_WINDOW_SYSTEM => "WindowSystem".into(),
-                _ => {
-                    format!("{source:X}")
-                }
-            };
-            let ty = match ty {
-                GL::DEBUG_TYPE_DEPRECATED_BEHAVIOR => "DeprecatedBehaviour".into(),
-                GL::DEBUG_TYPE_ERROR => "Error".into(),
-                GL::DEBUG_TYPE_MARKER => "Marker".into(),
-                GL::DEBUG_TYPE_OTHER => "Other".into(),
-                GL::DEBUG_TYPE_PERFORMANCE => "Parformance".into(),
-                GL::DEBUG_TYPE_POP_GROUP => "PopGroup".into(),
-                GL::DEBUG_TYPE_PORTABILITY => "Portability".into(),
-                GL::DEBUG_TYPE_PUSH_GROUP => "PushGroup".into(),
-                GL::DEBUG_TYPE_UNDEFINED_BEHAVIOR => "Undifined Behaviour".into(),
-                _ => format!("{ty:X}"),
-            };
-            let severity = match severity {
-                GL::DEBUG_SEVERITY_HIGH => "HIGH".into(),
-                GL::DEBUG_SEVERITY_LOW => "LOW".into(),
-                GL::DEBUG_SEVERITY_MEDIUM => "MEDI".into(),
-                GL::DEBUG_SEVERITY_NOTIFICATION => "NOTIFICATION".into(),
-                GL::INVALID_OPERATION => "INVALID_OPERATION".into(),
-                _ => format!("{severity:X}"),
-            };
-            println!("{source} {ty} {severity} {d}: {detalis}");
-        });
-        gl.enable(GL::DEBUG_OUTPUT)
+    pub struct Backend {
+        engine: Engine,
+        rt: Runtime,
     }
-    Ok((event_loop, window, config, context, surface, gl))
+
+    impl Backend {
+        pub fn new(engine: Engine, rt: Runtime) -> Self {
+            Self { engine, rt }
+        }
+
+        pub fn preview(mut self) {
+            let event_loop = EventLoopBuilder::new().build().unwrap();
+            let config_picker = |config: Box<dyn Iterator<Item = Config> + '_>| {
+                let configs = config.collect::<Vec<_>>();
+                let mut config = configs.first().unwrap().clone();
+                let mut index = 0;
+                println!("Configs:");
+                for (i, new_config) in configs.into_iter().enumerate() {
+                    config = new_config;
+                    let color_buffer_type = config.color_buffer_type();
+                    let float_pixels = config.float_pixels();
+                    let alpha_size = config.alpha_size();
+                    let depth_size = config.depth_size();
+                    let stencil_size = config.stencil_size();
+                    let num_samples = config.num_samples();
+                    let srgb_capable = config.srgb_capable();
+                    let supports_transparency = config.supports_transparency();
+                    let hardware_accelerated = config.hardware_accelerated();
+                    let config_surface_types = config.config_surface_types();
+                    let api = config.api();
+                    println!("{i}:");
+                    println!("  ColorBufferType: {color_buffer_type:?}");
+                    println!("  FloatPixels: {float_pixels}");
+                    println!("  AlphaSize: {alpha_size}");
+                    println!("  DepthSize: {depth_size}");
+                    println!("  StencilSize: {stencil_size}");
+                    println!("  NumSamples: {num_samples}");
+                    println!("  SrgbCapable: {srgb_capable}");
+                    println!("  SupportsTransparency: {supports_transparency:?}");
+                    println!("  HardwareAccelerated: {hardware_accelerated}");
+                    println!("  SurfaceTypes: {config_surface_types:?}");
+                    println!("  Api: {api:?}");
+                    match config {
+                        Config::Egl(_) => println!("  Backend: EGL"),
+                        Config::Glx(_) => println!("  Backend: GLX"),
+                        _ => {
+                            println!("  Backend: Unknown")
+                        }
+                    }
+                    index = i;
+                }
+                println!("Was selected: {index}");
+                config
+            };
+
+            let audio_sender;
+
+            ffmpeg_next::init().unwrap();
+            let version = ffmpeg_next::util::version();
+            println!("FFMPEG: {version}");
+
+            {
+                ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Trace);
+                ffmpeg_next::log::set_flags(ffmpeg_next::log::Flags::SKIP_REPEATED);
+            }
+
+            println!("Hosts: {:?}", cpal::ALL_HOSTS);
+
+            let host = cpal::host_from_id(cpal::ALL_HOSTS[0]).unwrap();
+            let output = host.default_output_device().unwrap();
+
+            let name = output.name().unwrap();
+            println!("Output Device Name: {name}");
+
+            let configs = output.supported_output_configs().unwrap();
+            for config in configs {
+                println!("Config: {config:?}");
+            }
+
+            let config = output.default_output_config().unwrap();
+            println!("Default Output Config: {config:?}");
+
+            let config = cpal::SupportedStreamConfig::new(
+                2,
+                cpal::SampleRate(48000),
+                config.buffer_size().clone(),
+                cpal::SampleFormat::F32,
+            );
+
+            println!("Using config: {config:?}");
+
+            let (sender, receiver) = channel::<Vec<f32>>();
+            audio_sender = sender;
+
+            let mut buffer = Vec::<f32>::new();
+
+            let stream = output
+                .build_output_stream(
+                    &config.config(),
+                    move |out: &mut [f32], _callback_info| {
+                        while let Ok(buf) = receiver.try_recv() {
+                            buffer.extend(buf);
+                        }
+
+                        let mut tmp = buffer
+                            .drain(..out.len().min(buffer.len()))
+                            .collect::<Vec<f32>>();
+                        tmp.resize(out.len(), 0.);
+
+                        for (i, s) in tmp.into_iter().enumerate() {
+                            out[i] = s;
+                        }
+                    },
+                    |err| {
+                        println!("Audio Error: {err:?}");
+                    },
+                    None,
+                )
+                .unwrap();
+
+            stream.play().unwrap();
+
+            pub struct Ctx {
+                config: Config,
+                display: Display,
+
+                context_attributes: ContextAttributes,
+                context: PossiblyCurrentContext,
+
+                window: Window,
+                surface_attributes: SurfaceAttributes<WindowSurface>,
+                surface: Surface<WindowSurface>,
+
+                gcx: GCX,
+            }
+
+            let mut ctx: Option<Ctx> = None;
+
+            fn init_ctx(
+                event_loop: &EventLoopWindowTarget<()>,
+                config_picker: &dyn Fn(Box<dyn Iterator<Item = Config> + '_>) -> Config,
+            ) -> Ctx {
+                let (_, config) = DisplayBuilder::new()
+                    .with_window_builder(None)
+                    .build(&event_loop, ConfigTemplateBuilder::new(), config_picker)
+                    .unwrap();
+                let window = glutin_winit::finalize_window(
+                    event_loop,
+                    WindowBuilder::new().with_title("Motion Man Preview"),
+                    &config,
+                )
+                .unwrap();
+                let display = config.display();
+                let surface_attributes;
+                {
+                    let size = window.inner_size();
+                    surface_attributes = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+                        window.raw_window_handle(),
+                        size.width.try_into().unwrap(),
+                        size.height.try_into().unwrap(),
+                    );
+                }
+                let surface = unsafe {
+                    display
+                        .create_window_surface(&config, &surface_attributes)
+                        .unwrap()
+                };
+
+                let context_attributes =
+                    ContextAttributesBuilder::new().build(Some(window.raw_window_handle()));
+                let context = unsafe {
+                    display
+                        .create_context(&config, &context_attributes)
+                        .unwrap()
+                };
+
+                let context = context.make_current(&surface).unwrap();
+                surface
+                    .set_swap_interval(&context, glutin::surface::SwapInterval::DontWait)
+                    .unwrap();
+
+                let gl = unsafe {
+                    glow::Context::from_loader_function_cstr(|addr| display.get_proc_address(addr))
+                };
+
+                let gcx = GCX::new(Rc::new(gl));
+
+                Ctx {
+                    config,
+                    display,
+                    context_attributes,
+                    context,
+                    window,
+                    surface_attributes,
+                    surface,
+                    gcx,
+                }
+            }
+
+            let mut running = false;
+            let mut last = Instant::now();
+
+            event_loop
+                .run(|event, event_loop| 'lop: {
+                    //
+                    match event {
+                        Event::NewEvents(cause) => match cause {
+                            winit::event::StartCause::ResumeTimeReached {
+                                start,
+                                requested_resume,
+                            } => {
+                                let Some(ctx) = &mut ctx else { break 'lop };
+                                if !running {
+                                    event_loop
+                                        .set_control_flow(winit::event_loop::ControlFlow::Wait);
+                                    break 'lop;
+                                }
+                                ctx.window.request_redraw();
+                                event_loop.set_control_flow(
+                                    winit::event_loop::ControlFlow::WaitUntil(
+                                        Instant::now()
+                                            + Duration::from_secs_f64(
+                                                self.engine.info.try_read().unwrap().delta,
+                                            ),
+                                    ),
+                                );
+                            }
+                            winit::event::StartCause::WaitCancelled {
+                                start,
+                                requested_resume,
+                            } => {
+                                if !running {
+                                    break 'lop;
+                                }
+                                if let Some(resume) = requested_resume {
+                                    event_loop.set_control_flow(
+                                        winit::event_loop::ControlFlow::WaitUntil(resume),
+                                    );
+                                }
+                            }
+                            _ => {}
+                        },
+                        Event::WindowEvent { window_id, event } => match event {
+                            WindowEvent::RedrawRequested => {
+                                last = Instant::now();
+                                if self.engine.finished() {
+                                    event_loop.exit();
+                                }
+                                let Some(ctx) = &mut ctx else { break 'lop };
+                                self.rt.block_on(self.engine.run(&ctx.gcx));
+                                self.engine.render(&ctx.gcx);
+                                audio_sender
+                                    .send(self.engine.audio_buffer().to_vec())
+                                    .unwrap();
+                                ctx.surface.swap_buffers(&ctx.context).unwrap();
+                            }
+                            WindowEvent::Resized(size) => {
+                                let Some(ctx) = &mut ctx else { break 'lop };
+                                ctx.surface.resize(
+                                    &ctx.context,
+                                    size.width.try_into().unwrap(),
+                                    size.height.try_into().unwrap(),
+                                );
+                                ctx.gcx
+                                    .viewport(0, 0, size.width as i32, size.height as i32);
+                            }
+                            WindowEvent::CloseRequested => {
+                                std::process::abort();
+                            }
+                            WindowEvent::KeyboardInput { event, .. } => {
+                                let Some(ctx) = &mut ctx else { break 'lop };
+                                match event.physical_key {
+                                    PhysicalKey::Code(KeyCode::KeyL) => {
+                                        if !event.state.is_pressed() {
+                                            ctx.window.request_redraw();
+                                        }
+                                    }
+                                    PhysicalKey::Code(KeyCode::Space) => {
+                                        if !event.state.is_pressed() {
+                                            running = !running;
+                                            last = Instant::now();
+
+                                            if running {
+                                                event_loop.set_control_flow(
+                                                    winit::event_loop::ControlFlow::WaitUntil(
+                                                        last + Duration::from_secs_f64(
+                                                            self.engine
+                                                                .info
+                                                                .try_read()
+                                                                .unwrap()
+                                                                .delta,
+                                                        ),
+                                                    ),
+                                                )
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            _ => {}
+                        },
+                        Event::UserEvent(_) => todo!(),
+                        Event::Suspended => {
+                            _ = ctx.take();
+                        }
+                        Event::Resumed => {
+                            let tmp_ctx = init_ctx(event_loop, &config_picker);
+                            self.engine.init(&tmp_ctx.gcx);
+                            ctx = Some(tmp_ctx);
+                        }
+                        Event::LoopExiting => {
+                            println!("EventLoop Exiting!")
+                        }
+                        _ => {}
+                    }
+                })
+                .unwrap()
+        }
+    }
 }
 
 mod video {
